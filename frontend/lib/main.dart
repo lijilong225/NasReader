@@ -349,7 +349,7 @@ class _LoginPageState extends State<LoginPage> {
                   // 服务端 URL
                   TextFormField(
                     controller: _serverController,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: '后端服务地址',
                       hintText: serverHost,
                       prefixIcon: Icon(Icons.dns_outlined),
@@ -363,7 +363,7 @@ class _LoginPageState extends State<LoginPage> {
                   // 用户名
                   TextFormField(
                     controller: _usernameController,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: '用户名',
                       prefixIcon: Icon(Icons.person_outline),
                       border: OutlineInputBorder(),
@@ -377,7 +377,7 @@ class _LoginPageState extends State<LoginPage> {
                   TextFormField(
                     controller: _passwordController,
                     obscureText: true,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: '密码',
                       prefixIcon: Icon(Icons.lock_outline),
                       border: OutlineInputBorder(),

@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 
 class AppLogger {
   static final ValueNotifier<List<String>> logs = ValueNotifier([]);

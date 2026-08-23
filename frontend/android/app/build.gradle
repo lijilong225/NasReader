@@ -1,0 +1,9 @@
+android {
+    compileSdkVersion 34 // 或 flutter.compileSdkVersion (确保 >= 33)
+
+    defaultConfig {
+        minSdkVersion 21  // 必须 >= 21
+        targetSdkVersion 34
+        // ...
+    }
+}

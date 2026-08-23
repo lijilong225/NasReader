@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 
 import '../main.dart';
 import '../services/auth_service.dart';
+import '../main_navigation_container.dart';
 
 // --- 登录 / 注册统一页面 ---
 class LoginPage extends StatefulWidget {
@@ -31,9 +32,11 @@ class _LoginPageState extends State<LoginPage> {
 
   Future<void> _loadSavedServerUrl() async {
     final savedUrl = await AuthService.getBaseUrl();
-    setState(() {
-      _serverController.text = savedUrl;
-    });
+    if (savedUrl != null && savedUrl.isNotEmpty) {
+      _serverController.text = savedUrl; // 已做非空判断
+    } else {
+      _serverController.text = 'http://192.168.5.3:6088';
+    }
   }
 
   @override

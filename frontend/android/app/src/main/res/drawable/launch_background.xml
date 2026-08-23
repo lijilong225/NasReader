@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 启动底色 (浅羊皮纸色，避免刺眼白屏) -->
+    <item>
+        <color android:color="#F6EFE2" />
+    </item>
+</layer-list>

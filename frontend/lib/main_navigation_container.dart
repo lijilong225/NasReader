@@ -1,14 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 
-import 'pages/local_bookshelf_page.dart';
 import 'pages/file_browser_page.dart';
+import 'pages/local_bookshelf_page.dart';
 import 'pages/settings_page.dart';
 
 class MainNavigationContainer extends StatefulWidget {
   final Dio dio;
+  final ValueNotifier<ThemeMode> themeNotifier;
 
-  const MainNavigationContainer({super.key, required this.dio});
+  const MainNavigationContainer({
+    super.key,
+    required this.dio,
+    required this.themeNotifier,
+  });
 
   @override
   State<MainNavigationContainer> createState() => _MainNavigationContainerState();
@@ -17,39 +22,64 @@ class MainNavigationContainer extends StatefulWidget {
 class _MainNavigationContainerState extends State<MainNavigationContainer> {
   int _currentIndex = 0;
 
+  // 用于在切到设置页时主动触发缓存统计刷新
+  final GlobalKey<SettingsPageState> _settingsKey = GlobalKey<SettingsPageState>();
+
+  late final List<Widget> _pages;
+
+  @override
+  void initState() {
+    super.initState();
+    _pages = [
+      FileBrowserPage(dio: widget.dio),
+      LocalBookshelfPage(dio: widget.dio),
+      SettingsPage(
+        key: _settingsKey,
+        dio: widget.dio,
+        themeNotifier: widget.themeNotifier,
+      ),
+    ];
+  }
+
+  void _onTabTapped(int index) {
+    setState(() {
+      _currentIndex = index;
+    });
+
+    // 当用户切回「系统设置」Tab (index = 2) 时，自动刷新缓存大小
+    if (index == 2) {
+      _settingsKey.currentState?.calculateCacheSize();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final List<Widget> pages = [
-      LocalBookshelfPage(dio: widget.dio),
-      FileBrowserPage(dio: widget.dio),
-      SettingsPage(dio: widget.dio),
-    ];
-
     return Scaffold(
       body: IndexedStack(
         index: _currentIndex,
-        children: pages,
+        children: _pages,
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (int index) {
-          setState(() => _currentIndex = index);
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.book_outlined),
-            selectedIcon: Icon(Icons.book),
-            label: '本地书架',
-          ),
-          NavigationDestination(
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _currentIndex,
+        onTap: _onTabTapped,
+        type: BottomNavigationBarType.fixed,
+        selectedItemColor: Theme.of(context).colorScheme.primary,
+        unselectedItemColor: Colors.grey,
+        items: const [
+          BottomNavigationBarItem(
             icon: Icon(Icons.cloud_outlined),
-            selectedIcon: Icon(Icons.cloud),
+            activeIcon: Icon(Icons.cloud),
             label: 'NAS 书库',
           ),
-          NavigationDestination(
+          BottomNavigationBarItem(
+            icon: Icon(Icons.book_outlined),
+            activeIcon: Icon(Icons.book),
+            label: '本地书架',
+          ),
+          BottomNavigationBarItem(
             icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: '设置',
+            activeIcon: Icon(Icons.settings),
+            label: '系统设置',
           ),
         ],
       ),

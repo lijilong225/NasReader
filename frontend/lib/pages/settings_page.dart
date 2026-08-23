@@ -19,21 +19,40 @@ class SettingsPage extends StatefulWidget {
   });
 
   @override
-  State<SettingsPage> createState() => _SettingsPageState();
+  State<SettingsPage> createState() => SettingsPageState();
 }
 
-class _SettingsPageState extends State<SettingsPage> {
+class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver {
   String _cacheSizeStr = '计算中...';
   bool _isClearing = false;
+  bool _isCalculating = false;
 
   @override
   void initState() {
     super.initState();
-    _calculateCacheSize();
+    WidgetsBinding.instance.addObserver(this);
+    calculateCacheSize();
   }
 
-  // 1. 递归统计缓存大小
-  Future<void> _calculateCacheSize() async {
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // 监听 App 切换到前台状态时自动重新统计
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      calculateCacheSize();
+    }
+  }
+
+  // 供外部或自身调用的缓存统计方法
+  Future<void> calculateCacheSize() async {
+    if (_isCalculating) return;
+    _isCalculating = true;
+
     try {
       int totalBytes = 0;
 
@@ -60,6 +79,8 @@ class _SettingsPageState extends State<SettingsPage> {
         _cacheSizeStr = '未知';
       });
       AppLogger.log('❌ 统计缓存异常: $e');
+    } finally {
+      _isCalculating = false;
     }
   }
 
@@ -86,7 +107,7 @@ class _SettingsPageState extends State<SettingsPage> {
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
-  // 2. 清除缓存逻辑
+  // 清除缓存逻辑
   Future<void> _clearCache() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -115,7 +136,6 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() => _isClearing = true);
 
     try {
-      // 清空临时目录
       final tempDir = await getTemporaryDirectory();
       if (tempDir.existsSync()) {
         final list = tempDir.listSync();
@@ -126,7 +146,6 @@ class _SettingsPageState extends State<SettingsPage> {
         }
       }
 
-      // 清空下载的书籍
       final appDir = await getApplicationDocumentsDirectory();
       final booksDir = Directory(p.join(appDir.path, 'books'));
       if (booksDir.existsSync()) {
@@ -142,7 +161,7 @@ class _SettingsPageState extends State<SettingsPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('本地缓存已全部清除')),
       );
-      await _calculateCacheSize();
+      await calculateCacheSize();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -157,7 +176,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _handleLogout() async {
     try {
-      // 兼容 AuthService 可能存在的不同登出命名
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('jwt_token');
       await prefs.remove('auth_token');
@@ -175,84 +193,98 @@ class _SettingsPageState extends State<SettingsPage> {
     final currentTheme = widget.themeNotifier?.value ?? ThemeMode.system;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('系统设置')),
-      body: ListView(
-        children: [
-          const SizedBox(height: 8),
-
-          // 主题设置分组（若传入了 themeNotifier 则显示）
-          if (widget.themeNotifier != null) ...[
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text('外观与主题', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
-            ),
-            ListTile(
-              leading: const Icon(Icons.brightness_auto),
-              title: const Text('跟随系统'),
-              trailing: Radio<ThemeMode>(
-                value: ThemeMode.system,
-                groupValue: currentTheme,
-                onChanged: (val) {
-                  if (val != null) widget.themeNotifier!.value = val;
-                },
-              ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.light_mode),
-              title: const Text('浅色模式'),
-              trailing: Radio<ThemeMode>(
-                value: ThemeMode.light,
-                groupValue: currentTheme,
-              ),
-              onTap: () => widget.themeNotifier!.value = ThemeMode.light,
-            ),
-            ListTile(
-              leading: const Icon(Icons.dark_mode),
-              title: const Text('深色模式'),
-              trailing: Radio<ThemeMode>(
-                value: ThemeMode.dark,
-                groupValue: currentTheme,
-              ),
-              onTap: () => widget.themeNotifier!.value = ThemeMode.dark,
-            ),
-            const Divider(),
-          ],
-
-          // 存储与诊断分组
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Text('存储与诊断', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
-          ),
-          ListTile(
-            leading: const Icon(Icons.cleaning_services_outlined),
-            title: const Text('清除本地缓存'),
-            subtitle: Text('包含已下载书籍及网络临时文件 ($_cacheSizeStr)'),
-            trailing: _isClearing
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.chevron_right),
-            onTap: _isClearing ? null : _clearCache,
-          ),
-          ListTile(
-            leading: const Icon(Icons.receipt_long_outlined),
-            title: const Text('查看网络诊断日志'),
-            subtitle: const Text('抓包与 API 调试'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => AppLogger.showLogModal(context),
-          ),
-
-          const Divider(),
-
-          // 账户管理
-          ListTile(
-            leading: const Icon(Icons.logout, color: Colors.redAccent),
-            title: const Text('退出登录', style: TextStyle(color: Colors.redAccent)),
-            onTap: _handleLogout,
+      appBar: AppBar(
+        title: const Text('系统设置'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: '重新计算缓存',
+            onPressed: calculateCacheSize,
           ),
         ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: calculateCacheSize,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            const SizedBox(height: 8),
+
+            if (widget.themeNotifier != null) ...[
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text('外观与主题', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+              ),
+              ListTile(
+                leading: const Icon(Icons.brightness_auto),
+                title: const Text('跟随系统'),
+                trailing: Radio<ThemeMode>(
+                  value: ThemeMode.system,
+                  groupValue: currentTheme,
+                  onChanged: (val) {
+                    if (val != null) widget.themeNotifier!.value = val;
+                  },
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.light_mode),
+                title: const Text('浅色模式'),
+                trailing: Radio<ThemeMode>(
+                  value: ThemeMode.light,
+                  groupValue: currentTheme,
+                  onChanged: (val) {
+                    if (val != null) widget.themeNotifier!.value = val;
+                  },
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.dark_mode),
+                title: const Text('深色模式'),
+                trailing: Radio<ThemeMode>(
+                  value: ThemeMode.dark,
+                  groupValue: currentTheme,
+                  onChanged: (val) {
+                    if (val != null) widget.themeNotifier!.value = val;
+                  },
+                ),
+              ),
+              const Divider(),
+            ],
+
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Text('存储与诊断', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.cleaning_services_outlined),
+              title: const Text('清除本地缓存'),
+              subtitle: Text('包含已下载书籍及网络临时文件 ($_cacheSizeStr)'),
+              trailing: _isClearing
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.chevron_right),
+              onTap: _isClearing ? null : _clearCache,
+            ),
+            ListTile(
+              leading: const Icon(Icons.receipt_long_outlined),
+              title: const Text('查看网络诊断日志'),
+              subtitle: const Text('抓包与 API 调试'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => AppLogger.showLogModal(context),
+            ),
+
+            const Divider(),
+
+            ListTile(
+              leading: const Icon(Icons.logout, color: Colors.redAccent),
+              title: const Text('退出登录', style: TextStyle(color: Colors.redAccent)),
+              onTap: _handleLogout,
+            ),
+          ],
+        ),
       ),
     );
   }

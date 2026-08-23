@@ -8,6 +8,8 @@ import 'pages/file_browser_page.dart';
 
 // 全局 Navigation Key，用于在 Dio 拦截器中触发 401 登出跳转
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+// main.dart 中初始化 Dio
+String serverHost = 'http://192.168.5.3:6088';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -47,7 +49,7 @@ class AuthService {
 
   static Future<String> getBaseUrl() async {
     final url = await _storage.read(key: _keyBaseUrl);
-    return url ?? 'http://192.168.1.100:8080';
+    return url ?? serverHost;
   }
 
   static Future<void> saveBaseUrl(String url) =>
@@ -67,8 +69,9 @@ class NetworkClient {
       return _dioInstance!;
     }
 
+    baseUrl = baseUrl.replaceAll(RegExp(r'/api/?$'), '').replaceAll(RegExp(r'/$'), '');
     final options = BaseOptions(
-      baseUrl: baseUrl ?? 'http://192.168.1.100:8080',
+      baseUrl: baseUrl ?? serverHost,
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 30),
       contentType: 'application/json',
@@ -217,7 +220,7 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final _formKey = GlobalKey<FormState>();
   final _serverController =
-      TextEditingController(text: 'http://192.168.1.100:8080');
+      TextEditingController(text: serverHost);
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
 
@@ -345,7 +348,7 @@ class _LoginPageState extends State<LoginPage> {
                     controller: _serverController,
                     decoration: const InputDecoration(
                       labelText: '后端服务地址',
-                      hintText: 'http://192.168.1.100:8080',
+                      hintText: serverHost,
                       prefixIcon: Icon(Icons.dns_outlined),
                       border: OutlineInputBorder(),
                     ),

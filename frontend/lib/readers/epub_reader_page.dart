@@ -192,7 +192,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.88/dist/epub.min.js"></script>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body, #viewer { width: 100vw; height: 100vh; overflow: hidden; background: #F6EFE2; }
   </style>
 </head>
@@ -220,7 +220,6 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
       const base64Data = "$base64Epub";
       const arrayBuffer = base64ToArrayBuffer(base64Data);
 
-      // 直接通过 ArrayBuffer 实例化，避免所有网络请求与 CORS 跨域问题
       const book = ePub(arrayBuffer);
       const rendition = book.renderTo("viewer", {
         width: "100%",
@@ -259,16 +258,53 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
         }));
       });
 
-      rendition.on("click", function(event) {
-        const width = window.innerWidth;
-        const x = event.clientX;
-        if (x < width * 0.3) {
-          rendition.prev();
-        } else if (x > width * 0.7) {
-          rendition.next();
-        } else {
-          FlutterChannel.postMessage(JSON.stringify({ type: 'onTapCenter' }));
-        }
+      // 准确的热区点击与滑动防误触处理
+      rendition.on("rendered", function(section, iframeView) {
+        const iframeDoc = iframeView.document;
+        if (!iframeDoc) return;
+
+        let startX = 0;
+        let startY = 0;
+        let isMoving = false;
+
+        iframeDoc.addEventListener("touchstart", function(e) {
+          if (e.touches.length === 1) {
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+            isMoving = false;
+          }
+        }, { passive: true });
+
+        iframeDoc.addEventListener("touchmove", function(e) {
+          if (e.touches.length === 1) {
+            const dx = Math.abs(e.touches[0].clientX - startX);
+            const dy = Math.abs(e.touches[0].clientY - startY);
+            if (dx > 10 || dy > 10) {
+              isMoving = true;
+            }
+          }
+        }, { passive: true });
+
+        iframeDoc.addEventListener("touchend", function(e) {
+          // 如果用户是在滑动/拖拽选择，则不触发点击动作
+          if (isMoving) return;
+
+          const width = window.innerWidth || iframeDoc.documentElement.clientWidth;
+          const clickX = startX;
+
+          // 左侧 30% 翻上一页
+          if (clickX < width * 0.3) {
+            rendition.prev();
+          }
+          // 右侧 30% 翻下一页
+          else if (clickX > width * 0.7) {
+            rendition.next();
+          }
+          // 中间 40% 呼出/隐藏顶部与底部控制栏
+          else {
+            FlutterChannel.postMessage(JSON.stringify({ type: 'onTapCenter' }));
+          }
+        }, { passive: true });
       });
 
       window.nextPage = () => rendition.next();

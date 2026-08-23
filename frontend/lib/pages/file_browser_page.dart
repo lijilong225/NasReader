@@ -7,6 +7,7 @@ import 'package:open_file/open_file.dart';
 
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
+import '../services/app_logger.dart';
 
 enum SortField {
   name('文件名'),
@@ -102,7 +103,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
         '/api/v1/files/browse',
         queryParameters: {'path': path},
       );
-
+      AppLogger.log('浏览目录 $path 响应: ${res.data}', name: 'FileBrowserPage');
       if (res.statusCode == 200 && res.data != null) {
         // 兼容直接返回 items 的结构，以及可能带有 data 包装的结构
         List<dynamic> rawList = [];

@@ -244,7 +244,6 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
             builder: (ctx) => StreamTxtReaderPage(
               file: file,
               title: title, // 统一使用 title
-              dio: widget.dio,
             ),
           ),
         ).then((_) => _syncLocalCachedFiles());
@@ -256,7 +255,6 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
             builder: (ctx) => EpubReaderPage(
               file: file,
               title: title, // 统一使用 title
-              dio: widget.dio,
             ),
           ),
         ).then((_) => _syncLocalCachedFiles());

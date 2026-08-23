@@ -85,7 +85,6 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBin
           builder: (ctx) => StreamTxtReaderPage(
             file: file,
             title: title, // 统一使用 title
-            dio: widget.dio,
           ),
         ),
       ).then((_) => _loadLocalBooks());
@@ -96,7 +95,6 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBin
           builder: (ctx) => EpubReaderPage(
             file: file,
             title: title, // 统一使用 title
-            dio: widget.dio,
           ),
         ),
       ).then((_) => _loadLocalBooks());

@@ -518,11 +518,11 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                             checkmarkColor: Colors.white,
                             showCheckmark: false,
                             side: BorderSide(
-                              color: isSelected ? const Color(0xFF8D7358) : Colors.black,
+                              color: isSelected ? const Color(0xFF8D7358) : Colors.transparent,
                               width: 1,
                             ),
                             labelStyle: TextStyle(
-                              color: isSelected ? Colors.white : Colors.white70,
+                              color: isSelected ? Colors.white : Colors.black87,
                               fontSize: 12,
                               fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                             ),

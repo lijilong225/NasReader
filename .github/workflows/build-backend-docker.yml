@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5 # 升级至 v5 (Node 24 运行环境)
 
       - name: Set up QEMU (Multi-platform support)
         uses: docker/setup-qemu-action@v3

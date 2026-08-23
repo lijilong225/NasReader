@@ -25,6 +25,30 @@ enum SortOrder {
   const SortOrder(this.label);
 }
 
+// --- FileItem 模型定义 ---
+class FileItem {
+  final String name;
+  final String path;
+  final bool isDir;
+  final int size;
+
+  FileItem({
+    required this.name,
+    required this.path,
+    required this.isDir,
+    required this.size,
+  });
+
+  factory FileItem.fromJson(Map<String, dynamic> json) {
+    return FileItem(
+      name: json['name'] ?? '',
+      path: json['path'] ?? '',
+      isDir: json['is_dir'] ?? json['isDir'] ?? false,
+      size: json['size'] is int ? json['size'] : (json['size'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
 class FileBrowserPage extends StatefulWidget {
   final Dio dio;
 

@@ -6,10 +6,10 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 // 引入流式 TXT 阅读器与 EPUB 阅读器
-import 'stream_txt_reader_page.dart';
-import 'epub_reader_page.dart';
-import 'sync_database_service.dart';
-import 'epub_cover_extractor.dart';
+import '../readers/stream_txt_reader_page.dart';
+import '../readers/epub_reader_page.dart';
+import '../services/sync_database_service.dart';
+import '../services/epub_cover_extractor.dart';
 
 /// 本地缓存书籍模型
 class CachedBookItem {

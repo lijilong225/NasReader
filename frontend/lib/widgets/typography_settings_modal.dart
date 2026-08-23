@@ -1,7 +1,8 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'font_manager.dart';
+
+import '../core/font_manager.dart';
 import 'typography_config.dart';
 
 class TypographySettingsModal extends StatefulWidget {

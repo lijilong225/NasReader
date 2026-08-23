@@ -152,7 +152,7 @@ class _LoginPageState extends State<LoginPage> {
                     controller: _serverController,
                     decoration: const InputDecoration(
                       labelText: 'NAS 服务器地址',
-                      hintText: 'http://192.168.1.100:8080',
+                      hintText: 'http://192.168.5.3:6088',
                       prefixIcon: Icon(Icons.dns_outlined),
                       border: OutlineInputBorder(),
                     ),

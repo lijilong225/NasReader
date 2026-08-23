@@ -65,7 +65,7 @@ class _SettingsPageState extends State<SettingsPage> {
             controller: _serverController,
             decoration: InputDecoration(
               labelText: 'NAS 服务器地址',
-              hintText: 'http://192.168.1.100:8080',
+              hintText: 'http://192.168.5.3:6088',
               border: const OutlineInputBorder(),
               suffixIcon: IconButton(
                 icon: const Icon(Icons.save),

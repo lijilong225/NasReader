@@ -5,6 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 // 引入本地书架与 NAS 文件浏览器页面
 import 'pages/local_bookshelf_page.dart';
 import 'pages/file_browser_page.dart';
+import 'pages/settings_page.dart';
 import 'services/app_logger.dart';
 
 // 全局 Navigation Key，用于在 Dio 拦截器中触发 401 登出跳转
@@ -206,6 +207,7 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
     _pages = [
       LocalBookshelfPage(dio: widget.dio),
       FileBrowserPage(dio: widget.dio),
+      SettingsPage(dio: widget.dio),
     ];
   }
 
@@ -229,6 +231,11 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
             icon: Icon(Icons.cloud_outlined),
             selectedIcon: Icon(Icons.cloud),
             label: 'NAS 书库',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.settings_outlined),
+            selectedIcon: Icon(Icons.settings),
+            label: '设置',
           ),
         ],
       ),

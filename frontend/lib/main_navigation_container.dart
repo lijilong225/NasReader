@@ -1,8 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
-import 'local_bookshelf_page.dart';
-import 'file_browser_page.dart';
+import './pages/local_bookshelf_page.dart';
+import './pages/file_browser_page.dart';
 
 class MainNavigationContainer extends StatefulWidget {
   final Dio dio;

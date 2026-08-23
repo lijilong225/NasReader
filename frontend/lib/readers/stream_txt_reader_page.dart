@@ -2,13 +2,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'chunked_txt_engine.dart';
-import 'txt_toc_extractor.dart';
-import 'reader_theme.dart';
-import 'page_turn_mode.dart';
-import 'page_turn_view.dart';
-import 'typography_config.dart';
-import 'typography_settings_modal.dart';
+import '../core/chunked_txt_engine.dart';
+import '../core/txt_toc_extractor.dart';
+import '../core/reader_theme.dart';
+import '../core/page_turn_mode.dart';
+import '../core/page_turn_view.dart';
+import '../widgets/typography_config.dart';
+import '../widgets/typography_settings_modal.dart';
 
 class StreamTxtReaderPage extends StatefulWidget {
   final File file;

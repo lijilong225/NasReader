@@ -6,10 +6,10 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_static/shelf_static.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
-import 'page_turn_mode.dart';
-import 'font_manager.dart';
-import 'typography_config.dart';
-import 'typography_settings_modal.dart';
+import '../core/page_turn_mode.dart';
+import '../core/font_manager.dart';
+import '../widgets/typography_config.dart';
+import '../widgets/typography_settings_modal.dart';
 
 class EpubChapter {
   final String label;

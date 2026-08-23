@@ -7,12 +7,12 @@ import 'pages/settings_page.dart';
 
 class MainNavigationContainer extends StatefulWidget {
   final Dio dio;
-  final ValueNotifier<ThemeMode> themeNotifier;
+  final ValueNotifier<ThemeMode>? themeNotifier;
 
   const MainNavigationContainer({
     super.key,
     required this.dio,
-    required this.themeNotifier,
+    this.themeNotifier,
   });
 
   @override

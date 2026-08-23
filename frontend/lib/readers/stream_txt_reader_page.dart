@@ -493,10 +493,18 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                           return ChoiceChip(
                             label: Text(mode.label),
                             selected: isSelected,
-                            selectedColor: const Color(0xFF382E25),
+                            selectedColor: const Color(0xFF5A4A3A),
+                            backgroundColor: Colors.white.withOpacity(0.12),
+                            checkmarkColor: Colors.white,
+                            showCheckmark: false,
+                            side: BorderSide(
+                              color: isSelected ? const Color(0xFF8D7358) : Colors.white24,
+                              width: 1,
+                            ),
                             labelStyle: TextStyle(
                               color: isSelected ? Colors.white : Colors.white70,
                               fontSize: 12,
+                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                             ),
                             onSelected: (_) {
                               setState(() => _pageTurnMode = mode);

@@ -499,9 +499,17 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                             label: Text(mode.label),
                             selected: isSelected,
                             selectedColor: const Color(0xFF382E25),
+                            backgroundColor: Colors.white.withOpacity(0.12),
+                            checkmarkColor: Colors.white,
+                            showCheckmark: false,
+                            side: BorderSide(
+                              color: isSelected ? const Color(0xFF8D7358) : Colors.white24,
+                              width: 1,
+                            ),
                             labelStyle: TextStyle(
                               color: isSelected ? Colors.white : Colors.white70,
                               fontSize: 12,
+                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                             ),
                             onSelected: (_) => _changePageTurnMode(mode),
                           );

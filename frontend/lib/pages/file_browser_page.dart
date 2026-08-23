@@ -3,30 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:open_file/open_file.dart';
 
+import '../services/app_logger.dart';
+import '../services/auth_service.dart';
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
-import '../services/app_logger.dart';
 
-enum SortField {
-  name('文件名'),
-  createdTime('创建时间'),
-  modifiedTime('修改时间');
-
-  final String label;
-  const SortField(this.label);
-}
-
-enum SortOrder {
-  ascending('正序'),
-  descending('倒序');
-
-  final String label;
-  const SortOrder(this.label);
-}
-
-// --- FileItem 模型定义 ---
 class FileItem {
   final String name;
   final String path;
@@ -42,10 +24,10 @@ class FileItem {
 
   factory FileItem.fromJson(Map<String, dynamic> json) {
     return FileItem(
-      name: json['name'] ?? '',
-      path: json['path'] ?? '',
-      isDir: json['is_dir'] ?? json['isDir'] ?? false,
-      size: json['size'] is int ? json['size'] : (json['size'] as num?)?.toInt() ?? 0,
+      name: json['name']?.toString() ?? '',
+      path: json['path']?.toString() ?? '',
+      isDir: json['is_dir'] == true || json['isDir'] == true,
+      size: (json['size'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -53,59 +35,46 @@ class FileItem {
 class FileBrowserPage extends StatefulWidget {
   final Dio dio;
 
-  const FileBrowserPage({Key? key, required this.dio}) : super(key: key);
+  const FileBrowserPage({super.key, required this.dio});
 
   @override
   State<FileBrowserPage> createState() => _FileBrowserPageState();
 }
 
 class _FileBrowserPageState extends State<FileBrowserPage> {
-  String _currentPath = "/";
-  List<dynamic> _items = [];
+  String _currentPath = '/';
+  List<FileItem> _items = [];
   bool _isLoading = false;
-
-  SortField _currentSortField = SortField.name;
-  SortOrder _currentSortOrder = SortOrder.ascending;
-
-  Set<String> _cachedFileNames = {};
+  String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    _refreshPage();
+    _fetchDirectory(_currentPath);
   }
 
-  Future<void> _refreshPage() async {
-    await _syncLocalCachedFiles();
-    await _fetchDirectory(_currentPath);
-  }
-
-  Future<void> _syncLocalCachedFiles() async {
-    try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final localDir = Directory(p.join(appDir.path, 'books'));
-      if (localDir.existsSync()) {
-        final files = localDir.listSync().whereType<File>();
-        setState(() {
-          _cachedFileNames = files.map((f) => p.basename(f.path)).toSet();
-        });
-      }
-    } catch (e) {
-      debugPrint('获取本地缓存状态失败: $e');
-    }
+  void _showToast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   Future<void> _fetchDirectory(String path) async {
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
 
     try {
       final res = await widget.dio.get(
         '/api/v1/files/browse',
         queryParameters: {'path': path},
       );
-      AppLogger.log('浏览目录 $path 响应: ${res.data}');
+
+      AppLogger.log('[FileBrowser] 响应: ${res.data}');
+
       if (res.statusCode == 200 && res.data != null) {
-        // 兼容直接返回 items 的结构，以及可能带有 data 包装的结构
         List<dynamic> rawList = [];
         if (res.data is Map) {
           if (res.data['items'] is List) {
@@ -117,10 +86,9 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
           rawList = res.data;
         }
 
-        // 将 Map 转换为 FileItem 实体并按“文件夹优先 + 字母序”排序
         final parsedItems = rawList
-          .map((item) => FileItem.fromJson(Map<String, dynamic>.from(item)))
-          .toList()
+            .map((item) => FileItem.fromJson(Map<String, dynamic>.from(item)))
+            .toList()
           ..sort((a, b) {
             if (a.isDir && !b.isDir) return -1;
             if (!a.isDir && b.isDir) return 1;
@@ -128,18 +96,28 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
           });
 
         setState(() {
-          _currentPath = res.data['current_path'] ?? path;
+          _currentPath = res.data is Map && res.data['current_path'] != null
+              ? res.data['current_path'].toString()
+              : path;
           _items = parsedItems;
         });
       } else {
-        _showToast(res.data?['error'] ?? res.data?['msg'] ?? '获取目录失败');
+        final err = res.data?['error'] ?? res.data?['msg'] ?? '获取目录失败';
+        _showToast(err);
+        setState(() => _errorMessage = err);
       }
     } on DioException catch (e) {
       final status = e.response?.statusCode;
       final serverError = e.response?.data?['error'] ?? e.response?.data?['msg'];
-      _showToast(serverError ?? '网络请求失败 [$status]');
-    } catch (e) {
-      _showToast('数据解析异常: $e');
+      final err = serverError ?? '网络请求失败 [$status]';
+      _showToast(err);
+      setState(() => _errorMessage = err);
+      AppLogger.log('❌ 获取目录失败: $err');
+    } catch (e, stack) {
+      final err = '数据解析异常: $e';
+      _showToast(err);
+      setState(() => _errorMessage = err);
+      AppLogger.log('❌ 目录解析崩溃: $e\n$stack');
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -147,317 +125,175 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
     }
   }
 
-  List<dynamic> get _sortedItems {
-    final list = List<dynamic>.from(_items);
-    list.sort((a, b) {
-      final bool isDirA = a['is_dir'] ?? false;
-      final bool isDirB = b['is_dir'] ?? false;
+  Future<void> _downloadAndOpenBook(FileItem item) async {
+    final fileName = item.name;
+    final ext = p.extension(fileName).toLowerCase();
 
-      if (isDirA && !isDirB) return -1;
-      if (!isDirA && isDirB) return 1;
-
-      int comparison = 0;
-      switch (_currentSortField) {
-        case SortField.name:
-          final String nameA = a['name']?.toString().toLowerCase() ?? '';
-          final String nameB = b['name']?.toString().toLowerCase() ?? '';
-          comparison = nameA.compareTo(nameB);
-          break;
-        case SortField.createdTime:
-          final int tA = a['created_at'] ?? 0;
-          final int tB = b['created_at'] ?? 0;
-          comparison = tA.compareTo(tB);
-          break;
-        case SortField.modifiedTime:
-          final int tA = a['updated_at'] ?? a['modified_at'] ?? 0;
-          final int tB = b['updated_at'] ?? b['modified_at'] ?? 0;
-          comparison = tA.compareTo(tB);
-          break;
-      }
-
-      return _currentSortOrder == SortOrder.ascending ? comparison : -comparison;
-    });
-    return list;
-  }
-
-  void _showSortBottomSheet() {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('排序方式', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                        TextButton.icon(
-                          onPressed: () {
-                            setState(() {
-                              _currentSortOrder = _currentSortOrder == SortOrder.ascending
-                                  ? SortOrder.descending
-                                  : SortOrder.ascending;
-                            });
-                            setModalState(() {});
-                          },
-                          icon: Icon(
-                            _currentSortOrder == SortOrder.ascending
-                                ? Icons.arrow_upward
-                                : Icons.arrow_downward,
-                            size: 18,
-                          ),
-                          label: Text(_currentSortOrder.label),
-                        ),
-                      ],
-                    ),
-                    const Divider(),
-                    ...SortField.values.map((field) {
-                      final isSelected = _currentSortField == field;
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Icon(
-                          field == SortField.name
-                              ? Icons.sort_by_alpha
-                              : (field == SortField.createdTime ? Icons.schedule : Icons.edit_calendar),
-                          color: isSelected ? Theme.of(context).primaryColor : Colors.grey,
-                        ),
-                        title: Text(
-                          field.label,
-                          style: TextStyle(
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                            color: isSelected ? Theme.of(context).primaryColor : null,
-                          ),
-                        ),
-                        trailing: isSelected ? Icon(Icons.check, color: Theme.of(context).primaryColor) : null,
-                        onTap: () {
-                          setState(() => _currentSortField = field);
-                          Navigator.pop(ctx);
-                        },
-                      );
-                    }).toList(),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  void _onItemTap(Map<String, dynamic> item) {
-    final bool isDir = item['is_dir'] ?? false;
-    final String name = item['name'] ?? '';
-    final String fullPath = _currentPath == "/" ? "/$name" : "$_currentPath/$name";
-
-    if (isDir) {
-      _fetchDirectory(fullPath);
-    } else {
-      _downloadAndOpenFile(fullPath, name);
+    if (ext != '.txt' && ext != '.epub') {
+      _showToast('暂不支持该文件格式');
+      return;
     }
-  }
 
-  Future<void> _downloadAndOpenFile(String remotePath, String fileName) async {
     try {
       final appDir = await getApplicationDocumentsDirectory();
       final localDir = Directory(p.join(appDir.path, 'books'));
-      if (!localDir.existsSync()) {
-        localDir.createSync(recursive: true);
-      }
+      if (!localDir.existsSync()) localDir.createSync(recursive: true);
 
       final savePath = p.join(localDir.path, fileName);
-      final file = File(savePath);
+      final targetFile = File(savePath);
 
-      if (!file.existsSync()) {
-        _showLoadingDialog('正在从 NAS 下载...');
+      if (!targetFile.existsSync()) {
+        _showToast('正在下载: $fileName ...');
         await widget.dio.download(
           '/api/v1/files/download',
           savePath,
-          queryParameters: {'path': remotePath},
+          queryParameters: {'path': item.path.isNotEmpty ? item.path : p.join(_currentPath, fileName)},
         );
-        if (mounted) Navigator.pop(context);
       }
 
-      setState(() {
-        _cachedFileNames.add(fileName);
-      });
-
-      final ext = p.extension(fileName).toLowerCase();
-      final title = p.basenameWithoutExtension(fileName);
+      if (!mounted) return;
 
       if (ext == '.txt') {
-        if (!mounted) return;
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (ctx) => StreamTxtReaderPage(
-              bookId: fileName, // 补充必填参数 bookId
-              file: file,
-              title: title, // 统一使用 title
+            builder: (_) => StreamTxtReaderPage(
+              bookId: fileName,
+              file: targetFile,
+              title: p.basenameWithoutExtension(fileName),
             ),
           ),
-        ).then((_) => _syncLocalCachedFiles());
+        );
       } else if (ext == '.epub') {
-        if (!mounted) return;
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (ctx) => EpubReaderPage(
-              bookId: fileName, // 补充必填参数 bookId
-              file: file,
-              title: title, // 统一使用 title
+            builder: (_) => EpubReaderPage(
+              bookId: fileName,
+              file: targetFile,
+              title: p.basenameWithoutExtension(fileName),
             ),
           ),
-        ).then((_) => _syncLocalCachedFiles());
-      } else {
-        OpenFile.open(savePath);
+        );
       }
     } catch (e) {
-      if (mounted && Navigator.canPop(context)) {
-        Navigator.pop(context);
-      }
-      _showToast('打开或下载文件失败: $e');
+      _showToast('下载书籍失败: $e');
     }
   }
 
-  void _navigateBack() {
-    if (_currentPath == "/" || _currentPath.isEmpty) return;
-    final parts = _currentPath.split('/').where((p) => p.isNotEmpty).toList();
-    if (parts.isNotEmpty) {
-      parts.removeLast();
-      final parent = parts.isEmpty ? "/" : "/${parts.join('/')}";
-      _fetchDirectory(parent);
-    }
-  }
+  bool _canGoBack() => _currentPath != '/' && _currentPath.isNotEmpty;
 
-  void _showLoadingDialog(String msg) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => Dialog(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Row(
-            children: [
-              const CircularProgressIndicator(),
-              const SizedBox(width: 20),
-              Text(msg),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showToast(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  void _goBack() {
+    if (!_canGoBack()) return;
+    final parent = p.dirname(_currentPath);
+    _fetchDirectory(parent == '.' ? '/' : parent);
   }
 
   @override
   Widget build(BuildContext context) {
-    final sorted = _sortedItems;
-
-    return WillPopScope(
-      onWillPop: () async {
-        if (_currentPath != "/") {
-          _navigateBack();
-          return false;
-        }
-        return true;
+    return PopScope(
+      canPop: !_canGoBack(),
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _goBack();
       },
       child: Scaffold(
         appBar: AppBar(
           title: Text(
-            _currentPath == "/" ? "NAS 文件根目录" : p.basename(_currentPath),
-            style: const TextStyle(fontSize: 16),
+            _currentPath == '/' ? 'NAS 书库根目录' : p.basename(_currentPath),
+            overflow: TextOverflow.ellipsis,
           ),
-          leading: _currentPath != "/"
-              ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: _navigateBack)
+          leading: _canGoBack()
+              ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: _goBack)
               : null,
           actions: [
             IconButton(
-              icon: const Icon(Icons.sort),
-              tooltip: '排序',
-              onPressed: _showSortBottomSheet,
-            ),
-            IconButton(
               icon: const Icon(Icons.refresh),
               tooltip: '刷新',
-              onPressed: _refreshPage,
+              onPressed: () => _fetchDirectory(_currentPath),
             ),
           ],
         ),
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : sorted.isEmpty
-                ? const Center(child: Text("当前目录为空", style: TextStyle(color: Colors.grey)))
-                : ListView.separated(
-                    itemCount: sorted.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final item = sorted[index];
-                      final bool isDir = item['is_dir'] ?? false;
-                      final String name = item['name'] ?? '未知文件';
-                      final ext = p.extension(name).toLowerCase();
-                      final bool isCached = _cachedFileNames.contains(name);
-
-                      IconData iconData = Icons.insert_drive_file;
-                      Color iconColor = Colors.grey;
-
-                      if (isDir) {
-                        iconData = Icons.folder;
-                        iconColor = Colors.amber;
-                      } else if (ext == '.txt') {
-                        iconData = Icons.description;
-                        iconColor = Colors.blue;
-                      } else if (ext == '.epub') {
-                        iconData = Icons.menu_book;
-                        iconColor = Colors.green;
-                      }
-
-                      return ListTile(
-                        leading: Icon(iconData, color: iconColor),
-                        title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Row(
-                          children: [
-                            Text(
-                              isDir
-                                  ? '文件夹'
-                                  : '${((item['size'] ?? 0) / 1024 / 1024).toStringAsFixed(2)} MB',
-                              style: const TextStyle(fontSize: 12, color: Colors.grey),
-                            ),
-                            if (!isDir && isCached) ...[
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                                decoration: BoxDecoration(
-                                  color: Colors.green.shade50,
-                                  borderRadius: BorderRadius.circular(3),
-                                  border: Border.all(color: Colors.green.shade300, width: 0.5),
-                                ),
-                                child: Text(
-                                  '已缓存',
-                                  style: TextStyle(fontSize: 10, color: Colors.green.shade700),
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                        trailing: const Icon(Icons.chevron_right, size: 18, color: Colors.grey),
-                        onTap: () => _onItemTap(item),
-                      );
-                    },
-                  ),
+        body: SafeArea(child: _buildBody()),
       ),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_errorMessage != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 56, color: Colors.redAccent),
+              const SizedBox(height: 16),
+              Text(_errorMessage!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14)),
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.refresh),
+                label: const Text('重试'),
+                onPressed: () => _fetchDirectory(_currentPath),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_items.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.folder_open, size: 64, color: Colors.grey),
+            const SizedBox(height: 16),
+            Text(
+              '当前目录为空或未包含 .txt / .epub 书籍\n(路径: $_currentPath)',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.grey, height: 1.5),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
+      itemCount: _items.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        final item = _items[index];
+        final ext = p.extension(item.name).toLowerCase();
+
+        return ListTile(
+          leading: Icon(
+            item.isDir
+                ? Icons.folder
+                : (ext == '.txt'
+                    ? Icons.description
+                    : (ext == '.epub' ? Icons.menu_book : Icons.insert_drive_file)),
+            color: item.isDir
+                ? Colors.amber.shade700
+                : (ext == '.epub' ? Colors.green : Colors.blue),
+          ),
+          title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: item.isDir ? null : Text('${(item.size / 1024).toStringAsFixed(1)} KB'),
+          onTap: () {
+            if (item.isDir) {
+              final nextPath = _currentPath == '/' ? '/${item.name}' : '$_currentPath/${item.name}';
+              _fetchDirectory(nextPath);
+            } else {
+              _downloadAndOpenBook(item);
+            }
+          },
+        );
+      },
     );
   }
 }

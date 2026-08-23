@@ -73,7 +73,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
   Future<void> _fetchDirectory(String path) async {
     setState(() => _isLoading = true);
     try {
-      final res = await widget.dio.get('/api/v1/files/list', queryParameters: {'path': path});
+      final res = await widget.dio.get('/api/v1/files/browse', queryParameters: {'path': path});
       if (res.statusCode == 200 && res.data['code'] == 0) {
         setState(() {
           _currentPath = path;

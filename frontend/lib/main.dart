@@ -64,19 +64,30 @@ class AuthService {
 class NetworkClient {
   static Dio? _dioInstance;
 
+  /// 清洗 BaseUrl，确保末尾既没有多余的斜杠，也没有自带的 /api 前缀
+  static String sanitizeBaseUrl(String? rawUrl) {
+    if (rawUrl == null || rawUrl.trim().isEmpty) {
+      rawUrl = serverHost; // 回退到默认全局变量
+    }
+    String cleaned = rawUrl.trim();
+    // 递归剔除结尾的 / 和 /api
+    cleaned = cleaned.replaceAll(RegExp(r'/api/?$'), '').replaceAll(RegExp(r'/$'), '');
+    return cleaned;
+  }
+
+  /// 获取 Dio 单例
   static Dio getDio({String? baseUrl, String? token}) {
+    final cleanBaseUrl = sanitizeBaseUrl(baseUrl ?? _dioInstance?.options.baseUrl);
+
+    // 如果实例已存在且 baseUrl 没有发生改变，直接复用
     if (_dioInstance != null && baseUrl == null && token == null) {
       return _dioInstance!;
     }
-    if (baseUrl != null && baseUrl.isNotEmpty) {
-    baseUrl = baseUrl.replaceAll(RegExp(r'/api/?$'), '').replaceAll(RegExp(r'/$'), '');
-    } else {
-      baseUrl = serverHost;
-    }
+
     final options = BaseOptions(
-      baseUrl: baseUrl,
+      baseUrl: cleanBaseUrl,
       connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(seconds: 15),
       contentType: 'application/json',
     );
 
@@ -85,13 +96,22 @@ class NetworkClient {
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (reqOptions, handler) async {
+          // 打印完整请求地址供调试
+          debugPrint('🌐 [HTTP REQUEST] ${reqOptions.method} ${reqOptions.uri}');
+
           final currentToken = token ?? await AuthService.getToken();
           if (currentToken != null && currentToken.isNotEmpty) {
             reqOptions.headers['Authorization'] = 'Bearer $currentToken';
           }
           return handler.next(reqOptions);
         },
+        onResponse: (response, handler) {
+          debugPrint('✅ [HTTP ${response.statusCode}] ${response.requestOptions.uri}');
+          return handler.next(response);
+        },
         onError: (DioException error, handler) async {
+          debugPrint('❌ [HTTP ERROR ${error.response?.statusCode}] -> ${error.requestOptions.uri}');
+          
           // 401 鉴权失效：清除本地凭证并切回登录页
           if (error.response?.statusCode == 401) {
             await AuthService.clearAuth();
@@ -107,6 +127,11 @@ class NetworkClient {
 
     _dioInstance = dio;
     return dio;
+  }
+
+  /// 退出登录或切换服务器时，主动重置 Dio 实例
+  static void reset() {
+    _dioInstance = null;
   }
 }
 

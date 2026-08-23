@@ -13,6 +13,10 @@ jobs:
   build-apk:
     runs-on: ubuntu-latest
 
+    # 核心：授予创建和编辑 GitHub Release 的写权限
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v5 # 升级至 v5 (Node 24 运行环境)

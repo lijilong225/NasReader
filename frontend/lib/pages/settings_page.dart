@@ -1,15 +1,22 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/auth_service.dart';
 import '../services/app_logger.dart';
 
 class SettingsPage extends StatefulWidget {
-  final ValueNotifier<ThemeMode> themeNotifier;
+  final ValueNotifier<ThemeMode>? themeNotifier;
+  final Dio? dio;
 
-  const SettingsPage({super.key, required this.themeNotifier});
+  const SettingsPage({
+    super.key,
+    this.themeNotifier,
+    this.dio,
+  });
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -30,13 +37,13 @@ class _SettingsPageState extends State<SettingsPage> {
     try {
       int totalBytes = 0;
 
-      // 统计临时缓存目录 (Cache Dir)
+      // 统计临时缓存目录
       final tempDir = await getTemporaryDirectory();
       if (tempDir.existsSync()) {
         totalBytes += await _getDirSize(tempDir);
       }
 
-      // 统计本地已下载的书籍目录 (Documents/books)
+      // 统计已下载书籍目录
       final appDir = await getApplicationDocumentsDirectory();
       final booksDir = Directory(p.join(appDir.path, 'books'));
       if (booksDir.existsSync()) {
@@ -85,7 +92,7 @@ class _SettingsPageState extends State<SettingsPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('清理本地缓存'),
-        content: const Text('将清空已下载的离线书籍与网络临时缓存文件。确认清除？'),
+        content: const Text('将清空已下载的离线书籍与网络临时文件。确认清除？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -148,9 +155,24 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _handleLogout() async {
+    try {
+      // 兼容 AuthService 可能存在的不同登出命名
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('jwt_token');
+      await prefs.remove('auth_token');
+      await prefs.remove('token');
+    } catch (_) {}
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已退出登录')),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final currentTheme = widget.themeNotifier.value;
+    final currentTheme = widget.themeNotifier?.value ?? ThemeMode.system;
 
     return Scaffold(
       appBar: AppBar(title: const Text('系统设置')),
@@ -158,48 +180,45 @@ class _SettingsPageState extends State<SettingsPage> {
         children: [
           const SizedBox(height: 8),
 
-          // 主题设置分组
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Text('外观与主题', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
-          ),
-          ListTile(
-            leading: const Icon(Icons.brightness_auto),
-            title: const Text('跟随系统'),
-            trailing: Radio<ThemeMode>(
-              value: ThemeMode.system,
-              groupValue: currentTheme,
-              onChanged: (val) {
-                if (val != null) widget.themeNotifier.value = val;
-              },
+          // 主题设置分组（若传入了 themeNotifier 则显示）
+          if (widget.themeNotifier != null) ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Text('外观与主题', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
             ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.light_mode),
-            title: const Text('浅色模式'),
-            trailing: Radio<ThemeMode>(
-              value: ThemeMode.light,
-              groupValue: currentTheme,
-              onChanged: (val) {
-                if (val != null) widget.themeNotifier.value = val;
-              },
+            ListTile(
+              leading: const Icon(Icons.brightness_auto),
+              title: const Text('跟随系统'),
+              trailing: Radio<ThemeMode>(
+                value: ThemeMode.system,
+                groupValue: currentTheme,
+                onChanged: (val) {
+                  if (val != null) widget.themeNotifier!.value = val;
+                },
+              ),
             ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.dark_mode),
-            title: const Text('深色模式'),
-            trailing: Radio<ThemeMode>(
-              value: ThemeMode.dark,
-              groupValue: currentTheme,
-              onChanged: (val) {
-                if (val != null) widget.themeNotifier.value = val;
-              },
+            ListTile(
+              leading: const Icon(Icons.light_mode),
+              title: const Text('浅色模式'),
+              trailing: Radio<ThemeMode>(
+                value: ThemeMode.light,
+                groupValue: currentTheme,
+              ),
+              onTap: () => widget.themeNotifier!.value = ThemeMode.light,
             ),
-          ),
+            ListTile(
+              leading: const Icon(Icons.dark_mode),
+              title: const Text('深色模式'),
+              trailing: Radio<ThemeMode>(
+                value: ThemeMode.dark,
+                groupValue: currentTheme,
+              ),
+              onTap: () => widget.themeNotifier!.value = ThemeMode.dark,
+            ),
+            const Divider(),
+          ],
 
-          const Divider(),
-
-          // 存储与数据分组
+          // 存储与诊断分组
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Text('存储与诊断', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
@@ -231,13 +250,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ListTile(
             leading: const Icon(Icons.logout, color: Colors.redAccent),
             title: const Text('退出登录', style: TextStyle(color: Colors.redAccent)),
-            onTap: () async {
-              await AuthService.clearToken();
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('已退出登录')),
-              );
-            },
+            onTap: _handleLogout,
           ),
         ],
       ),

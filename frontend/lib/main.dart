@@ -68,10 +68,13 @@ class NetworkClient {
     if (_dioInstance != null && baseUrl == null && token == null) {
       return _dioInstance!;
     }
-
+    if (baseUrl != null && baseUrl.isNotEmpty) {
     baseUrl = baseUrl.replaceAll(RegExp(r'/api/?$'), '').replaceAll(RegExp(r'/$'), '');
+    } else {
+      baseUrl = serverHost;
+    }
     final options = BaseOptions(
-      baseUrl: baseUrl ?? serverHost,
+      baseUrl: baseUrl,
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 30),
       contentType: 'application/json',

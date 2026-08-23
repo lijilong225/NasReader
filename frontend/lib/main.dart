@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'pages/login_page.dart';
 import 'services/app_logger.dart';
 import 'main_navigation_container.dart';
+import 'services/auth_service.dart';
 
 // 全局 Navigation Key，用于在 Dio 拦截器中触发 401 登出跳转
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -35,29 +36,6 @@ class MyApp extends StatelessWidget {
       ),
       home: const SplashPage(),
     );
-  }
-}
-
-// --- 认证与安全存储管理服务 ---
-class AuthService {
-  static const _storage = FlutterSecureStorage();
-  static const _keyToken = 'auth_token';
-  static const _keyBaseUrl = 'server_base_url';
-
-  static Future<String?> getToken() => _storage.read(key: _keyToken);
-  static Future<void> saveToken(String token) =>
-      _storage.write(key: _keyToken, value: token);
-
-  static Future<String> getBaseUrl() async {
-    final url = await _storage.read(key: _keyBaseUrl);
-    return url ?? serverHost;
-  }
-
-  static Future<void> saveBaseUrl(String url) =>
-      _storage.write(key: _keyBaseUrl, value: url);
-
-  static Future<void> clearAuth() async {
-    await _storage.delete(key: _keyToken);
   }
 }
 

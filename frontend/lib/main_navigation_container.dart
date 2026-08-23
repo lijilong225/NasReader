@@ -1,12 +1,14 @@
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:dio/dio.dart';
 
-import './pages/local_bookshelf_page.dart';
-import './pages/file_browser_page.dart';
-import './pages/settings_page.dart';
+import 'pages/local_bookshelf_page.dart';
+import 'pages/file_browser_page.dart';
+import 'pages/settings_page.dart';
 
 class MainNavigationContainer extends StatefulWidget {
-  const MainNavigationContainer({super.key});
+  final Dio dio;
+
+  const MainNavigationContainer({super.key, required this.dio});
 
   @override
   State<MainNavigationContainer> createState() => _MainNavigationContainerState();
@@ -14,21 +16,13 @@ class MainNavigationContainer extends StatefulWidget {
 
 class _MainNavigationContainerState extends State<MainNavigationContainer> {
   int _currentIndex = 0;
-  late final Dio _dio;
-
-  @override
-  void initState() {
-    super.initState();
-    _dio = NetworkClient.getDio();
-  }
 
   @override
   Widget build(BuildContext context) {
-    // 对应 3 个主要页面
-    final pages = [
-      LocalBookshelfPage(dio: _dio),
-      FileBrowserPage(dio: _dio),
-      SettingsPage(dio: _dio),
+    final List<Widget> pages = [
+      LocalBookshelfPage(dio: widget.dio),
+      FileBrowserPage(dio: widget.dio),
+      SettingsPage(dio: widget.dio),
     ];
 
     return Scaffold(
@@ -39,9 +33,7 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
         onDestinationSelected: (int index) {
-          setState(() {
-            _currentIndex = index;
-          });
+          setState(() => _currentIndex = index);
         },
         destinations: const [
           NavigationDestination(

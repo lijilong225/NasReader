@@ -45,7 +45,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   int _currentChapterIndex = 0;
 
   ReaderThemeData _currentTheme = ReaderThemes.parchment;
-  PageTurnMode _pageTurnMode = PageTurnMode.cover;
+  PageTurnMode _pageTurnMode = PageTurnMode.none;
   TypographyConfig _typoConfig = const TypographyConfig();
 
   final GlobalKey<PageTurnViewState> _turnViewKey = GlobalKey<PageTurnViewState>();

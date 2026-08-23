@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:dio/dio.dart'; // 引入 dio
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 
@@ -26,7 +27,9 @@ class LocalBookItem {
 }
 
 class LocalBookshelfPage extends StatefulWidget {
-  const LocalBookshelfPage({super.key});
+  final Dio? dio; // 接收 dio 参数
+
+  const LocalBookshelfPage({super.key, this.dio});
 
   @override
   State<LocalBookshelfPage> createState() => _LocalBookshelfPageState();
@@ -77,7 +80,7 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> {
         }
       }
 
-      // 按最近修改时间倒序排列（最近阅读/下载的书排在前面）
+      // 按最近修改时间倒序排列
       items.sort((a, b) => b.lastModified.compareTo(a.lastModified));
 
       if (mounted) {
@@ -234,7 +237,6 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> {
               icon: const Icon(Icons.cloud_download_outlined),
               label: const Text('去下载书籍'),
               onPressed: () {
-                // 刷新重试
                 _loadLocalBooks();
               },
             ),

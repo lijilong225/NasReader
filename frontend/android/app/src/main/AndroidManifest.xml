@@ -1,0 +1,5 @@
+<application
+    android:label="NAS Reader"
+    android:name="${applicationName}"
+    android:icon="@mipmap/ic_launcher"
+    android:usesCleartextTraffic="true"> <!-- 必须添加此项支持内网 HTTP -->

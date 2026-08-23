@@ -72,20 +72,53 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
 
   Future<void> _fetchDirectory(String path) async {
     setState(() => _isLoading = true);
+
     try {
-      final res = await widget.dio.get('/api/v1/files/browse', queryParameters: {'path': path});
-      if (res.statusCode == 200 && res.data['code'] == 0) {
+      final res = await widget.dio.get(
+        '/api/v1/files/browse',
+        queryParameters: {'path': path},
+      );
+
+      if (res.statusCode == 200 && res.data != null) {
+        // 兼容直接返回 items 的结构，以及可能带有 data 包装的结构
+        List<dynamic> rawList = [];
+        if (res.data is Map) {
+          if (res.data['items'] is List) {
+            rawList = res.data['items'];
+          } else if (res.data['data'] is List) {
+            rawList = res.data['data'];
+          }
+        } else if (res.data is List) {
+          rawList = res.data;
+        }
+
+        // 将 Map 转换为 FileItem 实体并按“文件夹优先 + 字母序”排序
+        final parsedItems = rawList
+          .map((item) => FileItem.fromJson(Map<String, dynamic>.from(item)))
+          .toList()
+          ..sort((a, b) {
+            if (a.isDir && !b.isDir) return -1;
+            if (!a.isDir && b.isDir) return 1;
+            return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          });
+
         setState(() {
-          _currentPath = path;
-          _items = res.data['data'] ?? [];
+          _currentPath = res.data['current_path'] ?? path;
+          _items = parsedItems;
         });
       } else {
-        _showToast(res.data['msg'] ?? '获取目录失败');
+        _showToast(res.data?['error'] ?? res.data?['msg'] ?? '获取目录失败');
       }
+    } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      final serverError = e.response?.data?['error'] ?? e.response?.data?['msg'];
+      _showToast(serverError ?? '网络请求失败 [$status]');
     } catch (e) {
-      _showToast('网络请求异常: $e');
+      _showToast('数据解析异常: $e');
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 

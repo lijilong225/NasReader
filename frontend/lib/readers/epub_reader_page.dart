@@ -478,7 +478,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                             label: Text(mode.label),
                             selected: isSelected,
                             selectedColor: const Color(0xFF5A4A3A),
-                            backgroundColor: Colors.white.withOpacity(0.12),
+                            backgroundColor: Colors.grey.withOpacity(0.12),
                             checkmarkColor: Colors.white,
                             showCheckmark: false,
                             side: BorderSide(

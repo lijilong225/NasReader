@@ -22,6 +22,8 @@ class MainNavigationContainer extends StatefulWidget {
 class _MainNavigationContainerState extends State<MainNavigationContainer> {
   int _currentIndex = 0;
 
+  // 挂载 Key 用于 Tab 切换时联动刷新
+  final GlobalKey<LocalBookshelfPageState> _bookshelfKey = GlobalKey<LocalBookshelfPageState>();
   // 用于在切到设置页时主动触发缓存统计刷新
   final GlobalKey<SettingsPageState> _settingsKey = GlobalKey<SettingsPageState>();
 
@@ -31,8 +33,8 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
   void initState() {
     super.initState();
     _pages = [
-      FileBrowserPage(dio: widget.dio),
       LocalBookshelfPage(dio: widget.dio),
+      FileBrowserPage(dio: widget.dio),
       SettingsPage(
         key: _settingsKey,
         dio: widget.dio,
@@ -46,6 +48,10 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
       _currentIndex = index;
     });
 
+    // 1. 切到「本地书架」(index = 0) 时自动重新扫描目录
+    if (index == 0) {
+      _bookshelfKey.currentState?.loadLocalBooks();
+    }
     // 当用户切回「系统设置」Tab (index = 2) 时，自动刷新缓存大小
     if (index == 2) {
       _settingsKey.currentState?.calculateCacheSize();
@@ -67,14 +73,14 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
         unselectedItemColor: Colors.grey,
         items: const [
           BottomNavigationBarItem(
-            icon: Icon(Icons.cloud_outlined),
-            activeIcon: Icon(Icons.cloud),
-            label: 'NAS 书库',
-          ),
-          BottomNavigationBarItem(
             icon: Icon(Icons.book_outlined),
             activeIcon: Icon(Icons.book),
             label: '本地书架',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.cloud_outlined),
+            activeIcon: Icon(Icons.cloud),
+            label: 'NAS 书库',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.settings_outlined),

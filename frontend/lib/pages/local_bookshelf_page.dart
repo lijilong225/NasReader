@@ -32,20 +32,20 @@ class LocalBookshelfPage extends StatefulWidget {
   const LocalBookshelfPage({super.key, this.dio});
 
   @override
-  State<LocalBookshelfPage> createState() => _LocalBookshelfPageState();
+  State<LocalBookshelfPage> createState() => LocalBookshelfPageState();
 }
 
-class _LocalBookshelfPageState extends State<LocalBookshelfPage> {
+class LocalBookshelfPageState extends State<LocalBookshelfPage> {
   List<LocalBookItem> _books = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadLocalBooks();
+    loadLocalBooks();
   }
 
-  Future<void> _loadLocalBooks() async {
+  Future<void> loadLocalBooks() async {
     setState(() => _isLoading = true);
 
     try {
@@ -176,7 +176,7 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> {
             title: book.title,
           ),
         ),
-      ).then((_) => _loadLocalBooks());
+      ).then((_) => loadLocalBooks());
     } else if (book.extension == '.epub') {
       Navigator.push(
         context,
@@ -187,7 +187,7 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> {
             title: book.title,
           ),
         ),
-      ).then((_) => _loadLocalBooks());
+      ).then((_) => loadLocalBooks());
     }
   }
 
@@ -207,7 +207,7 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> {
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: '刷新书架',
-            onPressed: _loadLocalBooks,
+            onPressed: loadLocalBooks,
           ),
         ],
       ),
@@ -237,7 +237,7 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> {
               icon: const Icon(Icons.cloud_download_outlined),
               label: const Text('去下载书籍'),
               onPressed: () {
-                _loadLocalBooks();
+                loadLocalBooks();
               },
             ),
           ],

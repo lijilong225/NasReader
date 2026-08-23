@@ -2,20 +2,20 @@ FROM golang:1.22-alpine AS builder
 
 WORKDIR /app
 
-# 使用 go.sum* 容错
+# 安装 C 编译工具链支持 CGO SQLite
+RUN apk add --no-cache gcc musl-dev
+
 COPY go.mod go.sum* ./
 RUN go mod download || true
 
-# 拷贝其余源码
 COPY . .
 
-# 静态编译二进制
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o reader-server .
+# 开启 CGO 编译
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o reader-server .
 
-# 生产运行镜像
+# 运行阶段
 FROM alpine:latest
 WORKDIR /app
-
 RUN apk --no-cache add ca-certificates tzdata
 COPY --from=builder /app/reader-server .
 

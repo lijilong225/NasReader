@@ -3,11 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 // 引入本地书架与 NAS 文件浏览器页面
-import 'pages/local_bookshelf_page.dart';
-import 'pages/file_browser_page.dart';
-import 'pages/settings_page.dart';
 import 'pages/login_page.dart';
 import 'services/app_logger.dart';
+import 'main_navigation_container.dart';
 
 // 全局 Navigation Key，用于在 Dio 拦截器中触发 401 登出跳转
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -182,63 +180,6 @@ class _SplashPageState extends State<SplashPage> {
     return const Scaffold(
       body: Center(
         child: CircularProgressIndicator(),
-      ),
-    );
-  }
-}
-
-// --- 底部导航主容器 (双 Tab: 本地书架 / NAS 书库) ---
-class MainNavigationContainer extends StatefulWidget {
-  final Dio dio;
-
-  const MainNavigationContainer({super.key, required this.dio});
-
-  @override
-  State<MainNavigationContainer> createState() =>
-      _MainNavigationContainerState();
-}
-
-class _MainNavigationContainerState extends State<MainNavigationContainer> {
-  int _currentIndex = 0;
-  late final List<Widget> _pages;
-
-  @override
-  void initState() {
-    super.initState();
-    _pages = [
-      LocalBookshelfPage(dio: widget.dio),
-      FileBrowserPage(dio: widget.dio),
-      SettingsPage(dio: widget.dio),
-    ];
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _pages,
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (idx) => setState(() => _currentIndex = idx),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.book_outlined),
-            selectedIcon: Icon(Icons.book),
-            label: '本地书架',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.cloud_outlined),
-            selectedIcon: Icon(Icons.cloud),
-            label: 'NAS 书库',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: '设置',
-          ),
-        ],
       ),
     );
   }

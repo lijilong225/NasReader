@@ -97,12 +97,7 @@ class NetworkClient {
       InterceptorsWrapper(
         onRequest: (reqOptions, handler) async {
           // 打印完整请求地址供调试
-          showDialog(
-            context: context,
-            builder: (_) => const AlertDialog(
-              content: '🌐 [HTTP REQUEST] ${reqOptions.method} ${reqOptions.uri}',
-            ),
-          );
+          AppLogger.log('🌐 [HTTP REQUEST] ${reqOptions.method} ${reqOptions.uri}');
           final currentToken = token ?? await AuthService.getToken();
           if (currentToken != null && currentToken.isNotEmpty) {
             reqOptions.headers['Authorization'] = 'Bearer $currentToken';
@@ -110,23 +105,11 @@ class NetworkClient {
           return handler.next(reqOptions);
         },
         onResponse: (response, handler) {
-          debugPrint('✅ [HTTP ${response.statusCode}] ${response.requestOptions.uri}');
-          showDialog(
-            context: context,
-            builder: (_) => const AlertDialog(
-              content: '🌐 [HTTP RESPONSE] ${response.requestOptions.method} ${response.requestOptions.uri}',
-            ),
-          );
+          AppLogger.log('✅ [HTTP ${response.statusCode}] ${response.requestOptions.uri}');
           return handler.next(response);
         },
         onError: (DioException error, handler) async {
-          debugPrint('❌ [HTTP ERROR ${error.response?.statusCode}] -> ${error.requestOptions.uri}');
-          showDialog(
-            context: context,
-            builder: (_) => const AlertDialog(
-              content: '🌐 [HTTP ERROR] ${error.response?.statusCode} -> ${error.requestOptions.uri}',
-            ),
-          );
+          AppLogger.log('❌ [HTTP ERROR ${error.response?.statusCode}] -> ${error.requestOptions.uri}');
           // 401 鉴权失效：清除本地凭证并切回登录页
           if (error.response?.statusCode == 401) {
             await AuthService.clearAuth();

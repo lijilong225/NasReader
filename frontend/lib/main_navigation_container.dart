@@ -24,6 +24,7 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
     _pages = [
       LocalBookshelfPage(dio: widget.dio),
       FileBrowserPage(dio: widget.dio),
+      SettingsPage(dio: _dio),
     ];
   }
 
@@ -34,19 +35,33 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
         index: _currentIndex,
         children: _pages,
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (idx) => setState(() => _currentIndex = idx),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.book_outlined),
-            selectedIcon: Icon(Icons.book),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _currentIndex,
+        type: BottomNavigationBarType.fixed,
+        onTap: (index) {
+          // 点击第 4 个 Item（索引 3）时弹出日志浮窗，不切换主 Tab
+          if (index == 3) {
+            AppLogger.showLogModal(context);
+            return;
+          }
+          setState(() => _currentIndex = index);
+        },
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.book),
             label: '本地书架',
           ),
-          NavigationDestination(
-            icon: Icon(Icons.cloud_outlined),
-            selectedIcon: Icon(Icons.cloud),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.cloud_queue),
             label: 'NAS 书库',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.settings),
+            label: '设置',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.bug_report, color: Colors.orange),
+            label: '网络日志',
           ),
         ],
       ),

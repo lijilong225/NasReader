@@ -71,8 +71,7 @@ android {
 
     buildTypes {
         release {
-            // 生产包默认使用 debug 签名方便直接测试，或在此配置 release 签名
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
             minifyEnabled false
             shrinkResources false
         }

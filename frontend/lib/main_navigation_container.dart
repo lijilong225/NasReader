@@ -33,7 +33,10 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
   void initState() {
     super.initState();
     _pages = [
-      LocalBookshelfPage(dio: widget.dio),
+      LocalBookshelfPage(
+        key: _bookshelfKey, // 👈 绑定 Key
+        dio: widget.dio,
+      ),
       FileBrowserPage(dio: widget.dio),
       SettingsPage(
         key: _settingsKey,

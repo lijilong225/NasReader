@@ -40,6 +40,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   final Map<int, List<TxtPageSlice>> _chunkPagesCache = {};
   int _currentChunkIndex = 0;
   int _currentPageInChunk = 0;
+  int _currentSavedOffset = 0;
 
   List<TxtChapterItem> _toc = [];
   int _currentChapterIndex = 0;
@@ -51,9 +52,17 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   final GlobalKey<PageTurnViewState> _turnViewKey = GlobalKey<PageTurnViewState>();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
+  // 严格固定的内边距与栏高常量，保证计算与渲染 100% 严丝合缝
+  static const double kHorizontalPadding = 20.0;
+  static const double kVerticalPadding = 12.0;
+  static const double kHeaderHeight = 22.0;
+  static const double kFooterHeight = 22.0;
+  static const double kHeaderSpacing = 8.0;
+
   @override
   void initState() {
     super.initState();
+    _currentSavedOffset = widget.initialByteOffset;
     _engine = ChunkedTxtEngine(widget.file);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _initEngineAndScanToc();
@@ -61,8 +70,20 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
   @override
   void dispose() {
+    // 退出前强制保存一次当前精确进度
+    _saveCurrentProgress();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
+  }
+
+  void _saveCurrentProgress() {
+    final currentPages = _chunkPagesCache[_currentChunkIndex] ?? [];
+    if (currentPages.isNotEmpty && _currentPageInChunk < currentPages.length) {
+      final slice = currentPages[_currentPageInChunk];
+      final totalSize = _engine.totalFileSize > 0 ? _engine.totalFileSize : 1;
+      final progress = (slice.endByteOffset / totalSize).clamp(0.0, 1.0);
+      widget.onProgressChanged?.call(slice.startByteOffset, progress);
+    }
   }
 
   Future<void> _initEngineAndScanToc() async {
@@ -75,21 +96,21 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         return;
       }
 
-      // 1. 快速构建物理分块索引 (< 5ms)
       await _engine.buildIndex();
 
       if (_engine.chunks.isEmpty) {
         setState(() {
           _isIndexing = false;
-          _errorMessage = 'TXT 文件为空';
+          _errorMessage = 'TXT 文本分块失败';
         });
         return;
       }
 
+      // 1. 查找 initialByteOffset 落在哪个分块
       int targetChunk = 0;
       for (int i = 0; i < _engine.chunks.length; i++) {
-        if (widget.initialByteOffset >= _engine.chunks[i].startByte &&
-            widget.initialByteOffset < _engine.chunks[i].endByte) {
+        if (_currentSavedOffset >= _engine.chunks[i].startByte &&
+            _currentSavedOffset < _engine.chunks[i].endByte) {
           targetChunk = i;
           break;
         }
@@ -97,33 +118,32 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
       _currentChunkIndex = targetChunk;
 
-      // 2. 立即解除 Loading，优先渲染第一屏正文
       if (mounted) {
         setState(() => _isIndexing = false);
       }
 
-      // 3. 异步分页与后台闲时扫描目录（不阻塞 UI）
+      // 2. 渲染首屏并定位到目标页
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
-        
-        // 优先加载当前页
-        await _loadChunkPages(_currentChunkIndex);
-        _preloadAdjacentChunks(_currentChunkIndex);
+        await _loadChunkPages(targetChunk, targetByteOffset: _currentSavedOffset);
+        _preloadAdjacentChunks(targetChunk);
+
         // 异步提取目录
         TxtTocExtractor.extractTocInIsolate(widget.file).then((tocList) {
           if (mounted) {
             setState(() {
               _toc = tocList;
-              _updateCurrentChapter(widget.initialByteOffset);
+              _updateCurrentChapter(_currentSavedOffset);
             });
           }
         }).catchError((_) {});
       });
-    } catch (e) {
+    } catch (e, stack) {
+      AppLogger.log('❌ TXT 初始化异常: $e\n$stack');
       if (mounted) {
         setState(() {
           _isIndexing = false;
-          _errorMessage = '打开书籍失败: $e';
+          _errorMessage = '解析 TXT 异常: $e';
         });
       }
     }
@@ -142,14 +162,26 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     _currentChapterIndex = activeIdx;
   }
 
+  // 精准计算正文区域的可用宽高
   Size _getContentSize() {
     final mq = MediaQuery.of(context);
-    final width = (mq.size.width - 40).clamp(200.0, 2000.0);
-    final height = (mq.size.height - mq.padding.top - mq.padding.bottom - 80).clamp(300.0, 3000.0);
-    return Size(width, height);
+    final availableWidth = mq.size.width - (kHorizontalPadding * 2);
+    // 减去安全区 + 垂直 Padding + 顶底信息条高度 + 间距
+    final availableHeight = mq.size.height -
+        mq.padding.top -
+        mq.padding.bottom -
+        (kVerticalPadding * 2) -
+        kHeaderHeight -
+        kFooterHeight -
+        kHeaderSpacing;
+
+    return Size(
+      availableWidth.clamp(100.0, 3000.0),
+      availableHeight.clamp(100.0, 4000.0),
+    );
   }
 
-  Future<void> _loadChunkPages(int chunkIdx) async {
+  Future<void> _loadChunkPages(int chunkIdx, {int? targetByteOffset}) async {
     if (chunkIdx < 0 || chunkIdx >= _engine.chunks.length) return;
     if (_chunkPagesCache.containsKey(chunkIdx)) return;
 
@@ -176,10 +208,29 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         );
       }).toList();
 
-      if (mounted) {
-        setState(() {
-          _chunkPagesCache[chunkIdx] = processedPages;
-        });
+      if (!mounted) return;
+
+      int targetPage = 0;
+      if (targetByteOffset != null && processedPages.isNotEmpty) {
+        for (int p = 0; p < processedPages.length; p++) {
+          if (targetByteOffset >= processedPages[p].startByteOffset &&
+              targetByteOffset < processedPages[p].endByteOffset) {
+            targetPage = p;
+            break;
+          }
+        }
+      }
+
+      setState(() {
+        _chunkPagesCache[chunkIdx] = processedPages;
+        if (chunkIdx == _currentChunkIndex) {
+          _currentPageInChunk = targetPage;
+        }
+      });
+
+      if (chunkIdx == _currentChunkIndex) {
+        _turnViewKey.currentState?.jumpToPage(targetPage);
+        _saveCurrentProgress();
       }
     } catch (e) {
       AppLogger.log('❌ 分页切片异常 (chunk $chunkIdx): $e');
@@ -199,13 +250,11 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     setState(() => _currentPageInChunk = indexInCurrentChunk);
 
     final currentSlice = currentPages[indexInCurrentChunk];
+    _currentSavedOffset = currentSlice.startByteOffset;
     _updateCurrentChapter(currentSlice.startByteOffset);
 
-    final totalSize = _engine.totalFileSize > 0 ? _engine.totalFileSize : 1;
-    final globalProgress =
-        (currentSlice.endByteOffset / totalSize).clamp(0.0, 1.0);
-    widget.onProgressChanged?.call(currentSlice.startByteOffset, globalProgress);
-
+    // 实时保存进度
+    _saveCurrentProgress();
     _preloadAdjacentChunks(_currentChunkIndex);
   }
 
@@ -225,31 +274,12 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       _currentChunkIndex = targetChunk;
       _currentPageInChunk = 0;
       _currentChapterIndex = chapter.index;
+      _currentSavedOffset = chapter.startByteOffset;
       _showControls = false;
     });
 
-    _loadChunkPages(targetChunk).then((_) {
-      final pages = _chunkPagesCache[targetChunk] ?? [];
-      int targetPageInChunk = 0;
-
-      for (int p = 0; p < pages.length; p++) {
-        if (chapter.startByteOffset >= pages[p].startByteOffset &&
-            chapter.startByteOffset < pages[p].endByteOffset) {
-          targetPageInChunk = p;
-          break;
-        }
-      }
-
-      setState(() => _currentPageInChunk = targetPageInChunk);
-      _turnViewKey.currentState?.jumpToPage(targetPageInChunk);
+    _loadChunkPages(targetChunk, targetByteOffset: chapter.startByteOffset).then((_) {
       _preloadAdjacentChunks(targetChunk);
-
-      if (pages.isNotEmpty) {
-        final slice = pages[targetPageInChunk];
-        final totalSize = _engine.totalFileSize > 0 ? _engine.totalFileSize : 1;
-        final progress = (slice.endByteOffset / totalSize).clamp(0.0, 1.0);
-        widget.onProgressChanged?.call(slice.startByteOffset, progress);
-      }
     });
   }
 
@@ -262,7 +292,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
           _typoConfig = newConfig;
           _chunkPagesCache.clear();
         });
-        _loadChunkPages(_currentChunkIndex).then((_) {
+        _loadChunkPages(_currentChunkIndex, targetByteOffset: _currentSavedOffset).then((_) {
           _preloadAdjacentChunks(_currentChunkIndex);
         });
       },
@@ -275,14 +305,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       return const Scaffold(
         backgroundColor: Color(0xFFF6EFE2),
         body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircularProgressIndicator(color: Color(0xFF382E25)),
-              SizedBox(height: 16),
-              Text('正在分析大文件章节目录与排版...', style: TextStyle(color: Colors.grey)),
-            ],
-          ),
+          child: CircularProgressIndicator(color: Color(0xFF382E25)),
         ),
       );
     }
@@ -291,305 +314,284 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       return Scaffold(
         appBar: AppBar(title: Text(widget.title)),
         body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.error_outline, size: 56, color: Colors.redAccent),
-                const SizedBox(height: 16),
-                Text(_errorMessage!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.redAccent)),
-              ],
-            ),
-          ),
+          child: Text(_errorMessage!, style: const TextStyle(color: Colors.redAccent)),
         ),
       );
     }
 
     final currentPages = _chunkPagesCache[_currentChunkIndex] ?? [];
 
-    return Scaffold(
-      key: _scaffoldKey,
-      backgroundColor: _currentTheme.bgColor,
-      drawer: Drawer(
-        child: Column(
-          children: [
-            DrawerHeader(
-              decoration: const BoxDecoration(color: Color(0xFF382E25)),
-              child: SizedBox(
-                width: double.infinity,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Text(
-                      widget.title,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '共 ${_toc.length} 章',
-                      style: const TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            Expanded(
-              child: _toc.isEmpty
-                  ? const Center(child: Text('未识别到目录章节', style: TextStyle(color: Colors.grey)))
-                  : ListView.builder(
-                      itemCount: _toc.length,
-                      itemBuilder: (context, index) {
-                        final item = _toc[index];
-                        final isCurrent = index == _currentChapterIndex;
-
-                        return ListTile(
-                          dense: true,
-                          title: Text(
-                            item.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight:
-                                  isCurrent ? FontWeight.bold : FontWeight.normal,
-                              color: isCurrent ? Colors.brown : Colors.black87,
-                            ),
-                          ),
-                          trailing: isCurrent
-                              ? const Icon(Icons.bookmark, size: 16, color: Colors.brown)
-                              : null,
-                          onTap: () => _jumpToChapter(item),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
-      ),
-      body: Stack(
-        children: [
-          currentPages.isEmpty
-              ? const Center(child: CircularProgressIndicator(color: Color(0xFF382E25)))
-              : PageTurnView(
-                  key: _turnViewKey,
-                  mode: _pageTurnMode,
-                  itemCount: currentPages.length,
-                  initialIndex: _currentPageInChunk,
-                  onPageChanged: _onPageChanged,
-                  onCenterTap: () => setState(() => _showControls = !_showControls),
-                  pageBuilder: (context, index) {
-                    return _buildPageLayout(
-                      currentPages[index],
-                      index,
-                      currentPages.length,
-                    );
-                  },
-                ),
-
-          // 顶部控制条
-          if (_showControls)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                color: Colors.black.withOpacity(0.85),
-                child: SafeArea(
-                  bottom: false,
-                  child: Row(
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) {
+        _saveCurrentProgress();
+      },
+      child: Scaffold(
+        key: _scaffoldKey,
+        backgroundColor: _currentTheme.bgColor,
+        drawer: Drawer(
+          child: Column(
+            children: [
+              DrawerHeader(
+                decoration: const BoxDecoration(color: Color(0xFF382E25)),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      IconButton(
-                        icon: const Icon(Icons.arrow_back, color: Colors.white),
-                        onPressed: () => Navigator.pop(context),
+                      Text(
+                        widget.title,
+                        style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      Expanded(
-                        child: Text(
-                          widget.title,
-                          style: const TextStyle(color: Colors.white, fontSize: 16),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.format_list_bulleted,
-                            color: Colors.white),
-                        tooltip: '目录',
-                        onPressed: () =>
-                            _scaffoldKey.currentState?.openDrawer(),
-                      ),
+                      const SizedBox(height: 8),
+                      Text('共 ${_toc.length} 章', style: const TextStyle(color: Colors.white70, fontSize: 12)),
                     ],
                   ),
                 ),
               ),
-            ),
+              Expanded(
+                child: _toc.isEmpty
+                    ? const Center(child: Text('未识别到目录章节', style: TextStyle(color: Colors.grey)))
+                    : ListView.builder(
+                        itemCount: _toc.length,
+                        itemBuilder: (context, index) {
+                          final item = _toc[index];
+                          final isCurrent = index == _currentChapterIndex;
 
-          // 底部控制面板
-          if (_showControls)
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                color: Colors.black.withOpacity(0.92),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                child: SafeArea(
-                  top: false,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // 1. 进度滑条
-                      Slider(
-                        value: _currentChunkIndex.toDouble().clamp(0.0, (_engine.chunks.length - 1).toDouble()),
-                        min: 0,
-                        max: (_engine.chunks.length > 1 ? _engine.chunks.length - 1 : 1).toDouble(),
-                        onChanged: (val) {
-                          final target = val.toInt();
-                          setState(() {
-                            _currentChunkIndex = target;
-                            _currentPageInChunk = 0;
-                          });
-                          _loadChunkPages(target).then((_) {
-                            _turnViewKey.currentState?.jumpToPage(0);
-                            _preloadAdjacentChunks(target);
-                          });
+                          return ListTile(
+                            dense: true,
+                            title: Text(
+                              item.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                                color: isCurrent ? Colors.brown : Colors.black87,
+                              ),
+                            ),
+                            trailing: isCurrent ? const Icon(Icons.bookmark, size: 16, color: Colors.brown) : null,
+                            onTap: () => _jumpToChapter(item),
+                          );
                         },
                       ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              _toc.isNotEmpty &&
-                                      _currentChapterIndex < _toc.length
-                                  ? _toc[_currentChapterIndex].title
-                                  : '分块 ${_currentChunkIndex + 1}/${_engine.chunks.length}',
-                              style: const TextStyle(
-                                  color: Colors.white70, fontSize: 12),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          Text(
-                            '${((_currentChunkIndex / (_engine.chunks.isNotEmpty ? _engine.chunks.length : 1)) * 100).toStringAsFixed(1)}%',
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 12),
-                          ),
-                        ],
-                      ),
-                      const Divider(color: Colors.white24, height: 16),
+              ),
+            ],
+          ),
+        ),
+        body: Stack(
+          children: [
+            currentPages.isEmpty
+                ? const Center(child: CircularProgressIndicator(color: Color(0xFF382E25)))
+                : PageTurnView(
+                    key: _turnViewKey,
+                    mode: _pageTurnMode,
+                    itemCount: currentPages.length,
+                    initialIndex: _currentPageInChunk,
+                    onPageChanged: _onPageChanged,
+                    onCenterTap: () => setState(() => _showControls = !_showControls),
+                    pageBuilder: (context, index) {
+                      return _buildPageLayout(
+                        currentPages[index],
+                        index,
+                        currentPages.length,
+                      );
+                    },
+                  ),
 
-                      // 2. 翻页模式选择
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: PageTurnMode.values.map((mode) {
-                          final isSelected = _pageTurnMode == mode;
-                          return ChoiceChip(
-                            label: Text(mode.label),
-                            selected: isSelected,
-                            selectedColor: const Color(0xFF5A4A3A),
-                            backgroundColor: Colors.white.withOpacity(0.12),
-                            checkmarkColor: Colors.white,
-                            showCheckmark: false,
-                            side: BorderSide(
-                              color: isSelected ? const Color(0xFF8D7358) : Colors.transparent,
-                              width: 1,
-                            ),
-                            labelStyle: TextStyle(
-                              color: isSelected ? Colors.white : Colors.black87,
-                              fontSize: 12,
-                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                            ),
-                            onSelected: (_) {
-                              setState(() => _pageTurnMode = mode);
-                            },
-                          );
-                        }).toList(),
-                      ),
-                      const SizedBox(height: 10),
-
-                      // 3. 排版设置弹窗与主题切换
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          OutlinedButton.icon(
-                            icon: const Icon(Icons.text_format,
-                                color: Colors.white, size: 18),
-                            label: const Text('排版 / 字体',
-                                style: TextStyle(color: Colors.white, fontSize: 12)),
-                            onPressed: _openTypographySettings,
+            // 顶部控制条
+            if (_showControls)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: Container(
+                  color: Colors.black.withOpacity(0.85),
+                  child: SafeArea(
+                    bottom: false,
+                    child: Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back, color: Colors.white),
+                          onPressed: () {
+                            _saveCurrentProgress();
+                            Navigator.pop(context);
+                          },
+                        ),
+                        Expanded(
+                          child: Text(
+                            widget.title,
+                            style: const TextStyle(color: Colors.white, fontSize: 16),
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          Row(
-                            children: ReaderThemes.all.map((theme) {
-                              final isSelected =
-                                  _currentTheme.bgColor == theme.bgColor;
-                              return Padding(
-                                padding: const EdgeInsets.only(left: 6),
-                                child: GestureDetector(
-                                  onTap: () =>
-                                      setState(() => _currentTheme = theme),
-                                  child: Container(
-                                    width: 48,
-                                    height: 28,
-                                    decoration: BoxDecoration(
-                                      color: theme.bgColor,
-                                      borderRadius: BorderRadius.circular(4),
-                                      border: Border.all(
-                                        color: isSelected
-                                            ? Colors.blueAccent
-                                            : Colors.grey,
-                                        width: isSelected ? 2 : 1,
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.format_list_bulleted, color: Colors.white),
+                          tooltip: '目录',
+                          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+            // 底部控制面板
+            if (_showControls)
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: Container(
+                  color: Colors.black.withOpacity(0.92),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: SafeArea(
+                    top: false,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // 1. 进度滑条
+                        Slider(
+                          value: _currentChunkIndex.toDouble().clamp(0.0, (_engine.chunks.length - 1).toDouble()),
+                          min: 0,
+                          max: (_engine.chunks.length > 1 ? _engine.chunks.length - 1 : 1).toDouble(),
+                          onChanged: (val) {
+                            final target = val.toInt();
+                            setState(() {
+                              _currentChunkIndex = target;
+                              _currentPageInChunk = 0;
+                            });
+                            _loadChunkPages(target).then((_) {
+                              _turnViewKey.currentState?.jumpToPage(0);
+                              _preloadAdjacentChunks(target);
+                            });
+                          },
+                        ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                _toc.isNotEmpty && _currentChapterIndex < _toc.length
+                                    ? _toc[_currentChapterIndex].title
+                                    : '分块 ${_currentChunkIndex + 1}/${_engine.chunks.length}',
+                                style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            Text(
+                              '${((_currentChunkIndex / (_engine.chunks.isNotEmpty ? _engine.chunks.length : 1)) * 100).toStringAsFixed(1)}%',
+                              style: const TextStyle(color: Colors.white70, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                        const Divider(color: Colors.white24, height: 16),
+
+                        // 2. 翻页模式选择
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: PageTurnMode.values.map((mode) {
+                            final isSelected = _pageTurnMode == mode;
+                            return ChoiceChip(
+                              label: Text(mode.label),
+                              selected: isSelected,
+                              selectedColor: const Color(0xFF5A4A3A),
+                              backgroundColor: Colors.white.withOpacity(0.85),
+                              checkmarkColor: Colors.white,
+                              showCheckmark: false,
+                              side: BorderSide(
+                                color: isSelected ? const Color(0xFF8D7358) : Colors.transparent,
+                                width: 1,
+                              ),
+                              labelStyle: TextStyle(
+                                color: isSelected ? Colors.white : Colors.black87,
+                                fontSize: 12,
+                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                              ),
+                              onSelected: (_) {
+                                setState(() => _pageTurnMode = mode);
+                              },
+                            );
+                          }).toList(),
+                        ),
+                        const SizedBox(height: 10),
+
+                        // 3. 排版设置弹窗与主题切换
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            OutlinedButton.icon(
+                              icon: const Icon(Icons.text_format, color: Colors.white, size: 18),
+                              label: const Text('排版 / 字体', style: TextStyle(color: Colors.white, fontSize: 12)),
+                              onPressed: _openTypographySettings,
+                            ),
+                            Row(
+                              children: ReaderThemes.all.map((theme) {
+                                final isSelected = _currentTheme.bgColor == theme.bgColor;
+                                return Padding(
+                                  padding: const EdgeInsets.only(left: 6),
+                                  child: GestureDetector(
+                                    onTap: () => setState(() => _currentTheme = theme),
+                                    child: Container(
+                                      width: 48,
+                                      height: 28,
+                                      decoration: BoxDecoration(
+                                        color: theme.bgColor,
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(
+                                          color: isSelected ? Colors.blueAccent : Colors.grey,
+                                          width: isSelected ? 2 : 1,
+                                        ),
                                       ),
-                                    ),
-                                    alignment: Alignment.center,
-                                    child: Text(
-                                      theme.name,
-                                      style: TextStyle(
-                                        color: theme.textColor,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
+                                      alignment: Alignment.center,
+                                      child: Text(
+                                        theme.name,
+                                        style: TextStyle(
+                                          color: theme.textColor,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
                                       ),
                                     ),
                                   ),
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        ],
-                      ),
-                    ],
+                                );
+                              }).toList(),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildPageLayout(
-      TxtPageSlice slice, int pageInChunk, int totalInChunk) {
-    final currentChapterTitle =
-        _toc.isNotEmpty && _currentChapterIndex < _toc.length
-            ? _toc[_currentChapterIndex].title
-            : widget.title;
+  Widget _buildPageLayout(TxtPageSlice slice, int pageInChunk, int totalInChunk) {
+    final currentChapterTitle = _toc.isNotEmpty && _currentChapterIndex < _toc.length
+        ? _toc[_currentChapterIndex].title
+        : widget.title;
 
     final totalSize = _engine.totalFileSize > 0 ? _engine.totalFileSize : 1;
 
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        padding: const EdgeInsets.symmetric(
+          horizontal: kHorizontalPadding,
+          vertical: kVerticalPadding,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 顶部章节名
             SizedBox(
-              height: 20,
+              height: kHeaderHeight,
               child: Text(
                 currentChapterTitle,
                 style: TextStyle(
@@ -599,7 +601,9 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: kHeaderSpacing),
+
+            // 正文内容
             Expanded(
               child: Text(
                 slice.content,
@@ -612,8 +616,10 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                 ),
               ),
             ),
+
+            // 底部信息栏
             SizedBox(
-              height: 20,
+              height: kFooterHeight,
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [

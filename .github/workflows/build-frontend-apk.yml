@@ -36,7 +36,7 @@ jobs:
       - name: Build Release APK
         working-directory: ./frontend
         run: |
-          flutter build apk --release
+          flutter build apk --release --android-skip-build-dependency-validation
 
       - name: Upload APK to Artifacts
         uses: actions/upload-artifact@v5 # 升级至 v5

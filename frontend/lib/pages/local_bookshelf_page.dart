@@ -75,6 +75,7 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBin
   }
 
   void _openBook(File file) {
+    final fileName = p.basename(file.path);
     final title = p.basenameWithoutExtension(file.path);
     final ext = p.extension(file.path).toLowerCase();
 
@@ -83,9 +84,9 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBin
         context,
         MaterialPageRoute(
           builder: (ctx) => StreamTxtReaderPage(
-            bookId: fileName, // 补充必填参数 bookId
+            bookId: fileName,
             file: file,
-            title: title, // 统一使用 title
+            title: title,
           ),
         ),
       ).then((_) => _loadLocalBooks());
@@ -94,9 +95,9 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBin
         context,
         MaterialPageRoute(
           builder: (ctx) => EpubReaderPage(
-            bookId: fileName, // 补充必填参数 bookId
+            bookId: fileName,
             file: file,
-            title: title, // 统一使用 title
+            title: title,
           ),
         ),
       ).then((_) => _loadLocalBooks());

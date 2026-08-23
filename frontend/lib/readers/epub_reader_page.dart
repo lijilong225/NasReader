@@ -2,11 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shelf/shelf.dart';
-import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
-import 'package:path/path.dart' as p;
 
 import '../core/page_turn_mode.dart';
 import '../widgets/typography_config.dart';
@@ -55,8 +52,6 @@ class EpubReaderPage extends StatefulWidget {
 }
 
 class _EpubReaderPageState extends State<EpubReaderPage> {
-  HttpServer? _localServer;
-  int _serverPort = 0;
   late final WebViewController _webViewController;
 
   bool _isLoading = true;
@@ -76,58 +71,30 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     super.initState();
     _currentCfi = widget.initialCfi ?? '';
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    _initServerAndWebView();
+    _initWebView();
   }
 
   @override
   void dispose() {
-    _localServer?.close(force: true);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
 
-  Future<void> _initServerAndWebView() async {
+  Future<void> _initWebView() async {
     try {
-      final fileName = p.basename(widget.file.path);
+      if (!widget.file.existsSync() || widget.file.lengthSync() == 0) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'EPUB 文件不存在或已损坏';
+        });
+        return;
+      }
 
-      // 本地静态流响应
-      Handler handler = (Request request) async {
-        final path = request.url.path;
+      // 1. 读取文件字节并转为 Base64
+      final bytes = await widget.file.readAsBytes();
+      final base64Epub = base64Encode(bytes);
 
-        if (path == '' || path == 'index.html') {
-          final html = _buildEpubViewerHtml('/$fileName', widget.initialCfi);
-          return Response.ok(
-            html,
-            headers: {
-              'Content-Type': 'text/html; charset=utf-8',
-              'Access-Control-Allow-Origin': '*',
-              'Access-Control-Allow-Methods': 'GET, OPTIONS',
-            },
-          );
-        }
-
-        if (path == fileName) {
-          if (!widget.file.existsSync()) {
-            return Response.notFound('File Not Found');
-          }
-          final bytes = await widget.file.readAsBytes();
-          return Response.ok(
-            bytes,
-            headers: {
-              'Content-Type': 'application/epub+zip',
-              'Access-Control-Allow-Origin': '*',
-              'Accept-Ranges': 'bytes',
-              'Content-Length': bytes.length.toString(),
-            },
-          );
-        }
-
-        return Response.notFound('Not Found');
-      };
-
-      _localServer = await shelf_io.serve(handler, '127.0.0.1', 0);
-      _serverPort = _localServer!.port;
-
+      // 2. 初始化 WebViewController
       _webViewController = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(const Color(0xFFF6EFE2))
@@ -148,21 +115,19 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
           ),
         );
 
-      // 允许 Android 混合加载内容
       if (_webViewController.platform is AndroidWebViewController) {
         AndroidWebViewController.enableDebugging(true);
-        (_webViewController.platform as AndroidWebViewController)
-            .setMediaPlaybackRequiresUserGesture(false);
       }
 
-      final launchUrl = 'http://127.0.0.1:$_serverPort/index.html';
-      await _webViewController.loadRequest(Uri.parse(launchUrl));
+      // 3. 构建并直接加载含有 Base64 数据的 HTML
+      final html = _buildEpubViewerHtml(base64Epub, widget.initialCfi);
+      await _webViewController.loadHtmlString(html, baseUrl: 'https://localhost/');
     } catch (e) {
       setState(() {
         _isLoading = false;
-        _errorMessage = '启动阅读服务失败: $e';
+        _errorMessage = '读取 EPUB 文件失败: $e';
       });
-      AppLogger.log('❌ EPUB 启动异常: $e');
+      AppLogger.log('❌ EPUB 载入异常: $e');
     }
   }
 
@@ -213,7 +178,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     } catch (_) {}
   }
 
-  String _buildEpubViewerHtml(String epubUrl, String? startCfi) {
+  String _buildEpubViewerHtml(String base64Epub, String? startCfi) {
     final initialLocation = (startCfi != null && startCfi.isNotEmpty)
         ? "'$startCfi'"
         : 'undefined';
@@ -237,12 +202,26 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     window.onerror = function(msg, url, line) {
       FlutterChannel.postMessage(JSON.stringify({
         type: 'onError',
-        message: msg + ' (line ' + line + ')'
+        message: 'JS Error: ' + msg + ' (line ' + line + ')'
       }));
     };
 
+    function base64ToArrayBuffer(base64) {
+      const binary_string = window.atob(base64);
+      const len = binary_string.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binary_string.charCodeAt(i);
+      }
+      return bytes.buffer;
+    }
+
     try {
-      const book = ePub("$epubUrl");
+      const base64Data = "$base64Epub";
+      const arrayBuffer = base64ToArrayBuffer(base64Data);
+
+      // 直接通过 ArrayBuffer 实例化，避免所有网络请求与 CORS 跨域问题
+      const book = ePub(arrayBuffer);
       const rendition = book.renderTo("viewer", {
         width: "100%",
         height: "100%",
@@ -253,7 +232,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
       rendition.display($initialLocation).then(() => {
         FlutterChannel.postMessage(JSON.stringify({ type: 'onReady' }));
       }).catch(err => {
-        FlutterChannel.postMessage(JSON.stringify({ type: 'onError', message: '渲染失败: ' + err }));
+        FlutterChannel.postMessage(JSON.stringify({ type: 'onError', message: '渲染异常: ' + err }));
       });
 
       book.loaded.navigation.then(function(toc) {
@@ -498,7 +477,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                           return ChoiceChip(
                             label: Text(mode.label),
                             selected: isSelected,
-                            selectedColor: const Color(0xFF382E25),
+                            selectedColor: const Color(0xFF5A4A3A),
                             backgroundColor: Colors.white.withOpacity(0.12),
                             checkmarkColor: Colors.white,
                             showCheckmark: false,

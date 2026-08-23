@@ -27,8 +27,8 @@ android {
     namespace "com.example.nas_reader" // 请根据你的实际包名调整
     compileSdk flutter.compileSdkVersion
 
-    // 关键：显式指定 NDK 版本
-    ndkVersion "25.1.8937393"
+    // 适配最新插件要求的 NDK 版本
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         // 启用 Java 8/17 核心库脱糖 (sqflite、webview_flutter 等插件所需)

@@ -7,7 +7,6 @@ import 'package:open_file/open_file.dart';
 
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
-import '../services/sync_database_service.dart';
 
 enum SortField {
   name('文件名'),
@@ -39,15 +38,36 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
   String _currentPath = "/";
   List<dynamic> _items = [];
   bool _isLoading = false;
-  
-  // 排序状态控制
+
   SortField _currentSortField = SortField.name;
   SortOrder _currentSortOrder = SortOrder.ascending;
+
+  Set<String> _cachedFileNames = {};
 
   @override
   void initState() {
     super.initState();
-    _fetchDirectory(_currentPath);
+    _refreshPage();
+  }
+
+  Future<void> _refreshPage() async {
+    await _syncLocalCachedFiles();
+    await _fetchDirectory(_currentPath);
+  }
+
+  Future<void> _syncLocalCachedFiles() async {
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final localDir = Directory(p.join(appDir.path, 'books'));
+      if (localDir.existsSync()) {
+        final files = localDir.listSync().whereType<File>();
+        setState(() {
+          _cachedFileNames = files.map((f) => p.basename(f.path)).toSet();
+        });
+      }
+    } catch (e) {
+      debugPrint('获取本地缓存状态失败: $e');
+    }
   }
 
   Future<void> _fetchDirectory(String path) async {
@@ -69,18 +89,15 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
     }
   }
 
-  // 排序处理核心：保持文件夹置顶，子项按选定规则排序
   List<dynamic> get _sortedItems {
     final list = List<dynamic>.from(_items);
     list.sort((a, b) {
       final bool isDirA = a['is_dir'] ?? false;
       final bool isDirB = b['is_dir'] ?? false;
 
-      // 1. 文件夹永远排在文件前面
       if (isDirA && !isDirB) return -1;
       if (!isDirA && isDirB) return 1;
 
-      // 2. 根据选定的字段比较
       int comparison = 0;
       switch (_currentSortField) {
         case SortField.name:
@@ -100,7 +117,6 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
           break;
       }
 
-      // 3. 应用正序或倒序
       return _currentSortOrder == SortOrder.ascending ? comparison : -comparison;
     });
     return list;
@@ -203,7 +219,6 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
       final savePath = p.join(localDir.path, fileName);
       final file = File(savePath);
 
-      // 如果尚未缓存，则发起远程下载
       if (!file.existsSync()) {
         _showLoadingDialog('正在从 NAS 下载...');
         await widget.dio.download(
@@ -211,10 +226,9 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
           savePath,
           queryParameters: {'path': remotePath},
         );
-        if (mounted) Navigator.pop(context); // 关闭 loading 弹窗
+        if (mounted) Navigator.pop(context);
       }
 
-      // 更新本地缓存标识集合
       setState(() {
         _cachedFileNames.add(fileName);
       });
@@ -229,7 +243,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
           MaterialPageRoute(
             builder: (ctx) => StreamTxtReaderPage(
               file: file,
-              bookTitle: title,
+              title: title, // 统一使用 title
               dio: widget.dio,
             ),
           ),
@@ -241,7 +255,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
           MaterialPageRoute(
             builder: (ctx) => EpubReaderPage(
               file: file,
-              bookTitle: title,
+              title: title, // 统一使用 title
               dio: widget.dio,
             ),
           ),
@@ -320,7 +334,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
             IconButton(
               icon: const Icon(Icons.refresh),
               tooltip: '刷新',
-              onPressed: () => _fetchDirectory(_currentPath),
+              onPressed: _refreshPage,
             ),
           ],
         ),
@@ -336,6 +350,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
                       final bool isDir = item['is_dir'] ?? false;
                       final String name = item['name'] ?? '未知文件';
                       final ext = p.extension(name).toLowerCase();
+                      final bool isCached = _cachedFileNames.contains(name);
 
                       IconData iconData = Icons.insert_drive_file;
                       Color iconColor = Colors.grey;
@@ -354,11 +369,30 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
                       return ListTile(
                         leading: Icon(iconData, color: iconColor),
                         title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Text(
-                          isDir
-                              ? '文件夹'
-                              : '${((item['size'] ?? 0) / 1024 / 1024).toStringAsFixed(2)} MB',
-                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        subtitle: Row(
+                          children: [
+                            Text(
+                              isDir
+                                  ? '文件夹'
+                                  : '${((item['size'] ?? 0) / 1024 / 1024).toStringAsFixed(2)} MB',
+                              style: const TextStyle(fontSize: 12, color: Colors.grey),
+                            ),
+                            if (!isDir && isCached) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.shade50,
+                                  borderRadius: BorderRadius.circular(3),
+                                  border: Border.all(color: Colors.green.shade300, width: 0.5),
+                                ),
+                                child: Text(
+                                  '已缓存',
+                                  style: TextStyle(fontSize: 10, color: Colors.green.shade700),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                         trailing: const Icon(Icons.chevron_right, size: 18, color: Colors.grey),
                         onTap: () => _onItemTap(item),

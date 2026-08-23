@@ -6,7 +6,6 @@ import 'package:path_provider/path_provider.dart';
 
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
-import '../services/epub_cover_extractor.dart';
 
 class LocalBookshelfPage extends StatefulWidget {
   final Dio dio;
@@ -34,7 +33,6 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBin
     super.dispose();
   }
 
-  // 当 App 从后台切回前台或页面重新获得焦点时自动刷新
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
@@ -52,7 +50,6 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBin
         localDir.createSync(recursive: true);
       }
 
-      // 扫描 .txt 与 .epub 文件
       final entities = localDir.listSync().where((entity) {
         if (entity is File) {
           final ext = p.extension(entity.path).toLowerCase();
@@ -61,7 +58,6 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBin
         return false;
       }).toList();
 
-      // 按修改时间倒序排列 (新下载的书排在前面)
       entities.sort((a, b) {
         final aTime = (a as File).lastModifiedSync();
         final bTime = (b as File).lastModifiedSync();
@@ -87,8 +83,8 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBin
         context,
         MaterialPageRoute(
           builder: (ctx) => StreamTxtReaderPage(
-            file: file, // 替换 filePath: file.path
-            bookTitle: title,
+            file: file,
+            title: title, // 统一使用 title
             dio: widget.dio,
           ),
         ),
@@ -98,8 +94,8 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBin
         context,
         MaterialPageRoute(
           builder: (ctx) => EpubReaderPage(
-            file: file, // 替换 filePath: file.path
-            bookTitle: title,
+            file: file,
+            title: title, // 统一使用 title
             dio: widget.dio,
           ),
         ),
@@ -148,7 +144,6 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBin
                     itemCount: _localBooks.length,
                     itemBuilder: (context, index) {
                       final file = _localBooks[index] as File;
-                      final fileName = p.basename(file.path);
                       final ext = p.extension(file.path).toLowerCase();
                       final title = p.basenameWithoutExtension(file.path);
 

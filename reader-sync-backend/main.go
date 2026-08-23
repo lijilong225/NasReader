@@ -48,6 +48,14 @@ func main() {
 		}
 	}
 
+	// 在受保护的 API 路由组内增加文件相关接口
+	fileGroup := api.Group("/files")
+	fileGroup.Use(middleware.AuthMiddleware())
+	{
+    	fileGroup.GET("/browse", handlers.BrowseDirectory)
+    	fileGroup.GET("/download", handlers.DownloadFile)
+    }
+
 	log.Println("Reader Sync Server started on :8080")
 	if err := r.Run(":8080"); err != nil {
 		log.Fatalf("Server failed to start: %v", err)

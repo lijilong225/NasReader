@@ -242,6 +242,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
           context,
           MaterialPageRoute(
             builder: (ctx) => StreamTxtReaderPage(
+              bookId: fileName, // 补充必填参数 bookId
               file: file,
               title: title, // 统一使用 title
             ),
@@ -253,6 +254,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
           context,
           MaterialPageRoute(
             builder: (ctx) => EpubReaderPage(
+              bookId: fileName, // 补充必填参数 bookId
               file: file,
               title: title, // 统一使用 title
             ),

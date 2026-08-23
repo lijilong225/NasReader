@@ -1,33 +1,42 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:dio/dio.dart'; // 引入 dio
+import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 
+import '../services/progress_sync_service.dart';
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
 import '../services/app_logger.dart';
 
-class LocalBookItem {
-  final File file;
-  final String name;
+class BookshelfItem {
+  final String bookId;
   final String title;
   final String extension;
-  final int size;
-  final DateTime lastModified;
+  final File? localFile;
+  final String remotePath;
+  final double progressPercent;
+  final String? epubCfi;
+  final int? txtByteOffset;
+  final DateTime lastReadTime;
 
-  LocalBookItem({
-    required this.file,
-    required this.name,
+  bool get isDownloaded => localFile != null && localFile!.existsSync();
+
+  BookshelfItem({
+    required this.bookId,
     required this.title,
     required this.extension,
-    required this.size,
-    required this.lastModified,
+    this.localFile,
+    required this.remotePath,
+    required this.progressPercent,
+    this.epubCfi,
+    this.txtByteOffset,
+    required this.lastReadTime,
   });
 }
 
 class LocalBookshelfPage extends StatefulWidget {
-  final Dio? dio; // 接收 dio 参数
+  final Dio? dio;
 
   const LocalBookshelfPage({super.key, this.dio});
 
@@ -35,145 +44,162 @@ class LocalBookshelfPage extends StatefulWidget {
   State<LocalBookshelfPage> createState() => LocalBookshelfPageState();
 }
 
-class LocalBookshelfPageState extends State<LocalBookshelfPage> {
-  List<LocalBookItem> _books = [];
+class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBindingObserver {
+  List<BookshelfItem> _books = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     loadLocalBooks();
   }
 
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      loadLocalBooks();
+    }
+  }
+
   Future<void> loadLocalBooks() async {
-    setState(() => _isLoading = true);
-
     try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final booksDir = Directory(p.join(appDir.path, 'books'));
-
-      if (!booksDir.existsSync()) {
-        booksDir.createSync(recursive: true);
+      // 1. 若有网络则尝试同步一次远端进度列表
+      if (widget.dio != null) {
+        await ProgressSyncService.syncWithRemote(widget.dio!);
       }
 
-      final List<FileSystemEntity> entities = booksDir.listSync();
-      final List<LocalBookItem> items = [];
+      final progressList = await ProgressSyncService.getAllLocalProgress();
 
-      for (var entity in entities) {
-        if (entity is File) {
-          final fileName = p.basename(entity.path);
-          final ext = p.extension(fileName).toLowerCase();
+      // 2. 扫描本地已缓存的书籍文件
+      final appDir = await getApplicationDocumentsDirectory();
+      final booksDir = Directory(p.join(appDir.path, 'books'));
+      if (!booksDir.existsSync()) booksDir.createSync(recursive: true);
 
-          if (ext == '.txt' || ext == '.epub') {
-            final stat = entity.statSync();
-            items.add(
-              LocalBookItem(
-                file: entity,
-                name: fileName,
-                title: p.basenameWithoutExtension(fileName),
-                extension: ext,
-                size: stat.size,
-                lastModified: stat.modified,
-              ),
-            );
-          }
+      final Map<String, File> localFilesMap = {};
+      for (var f in booksDir.listSync()) {
+        if (f is File) {
+          localFilesMap[p.basename(f.path)] = f;
         }
       }
 
-      // 按最近修改时间倒序排列
-      items.sort((a, b) => b.lastModified.compareTo(a.lastModified));
+      final Map<String, BookshelfItem> mergedItems = {};
+
+      // 3. 先加入远端记录
+      for (var pItem in progressList) {
+        final ext = p.extension(pItem.bookId).toLowerCase();
+        final localFile = localFilesMap[pItem.bookId];
+
+        mergedItems[pItem.bookId] = BookshelfItem(
+          bookId: pItem.bookId,
+          title: pItem.title.isNotEmpty ? pItem.title : p.basenameWithoutExtension(pItem.bookId),
+          extension: ext,
+          localFile: localFile,
+          remotePath: pItem.filePath,
+          progressPercent: pItem.progressPercent,
+          epubCfi: pItem.epubCfi,
+          txtByteOffset: pItem.txtByteOffset,
+          lastReadTime: DateTime.fromMillisecondsSinceEpoch(pItem.lastReadTime),
+        );
+      }
+
+      // 4. 补充本地已存在但尚未有远端进度的离线书籍
+      localFilesMap.forEach((name, file) {
+        if (!mergedItems.containsKey(name)) {
+          final ext = p.extension(name).toLowerCase();
+          if (ext == '.txt' || ext == '.epub') {
+            mergedItems[name] = BookshelfItem(
+              bookId: name,
+              title: p.basenameWithoutExtension(name),
+              extension: ext,
+              localFile: file,
+              remotePath: '',
+              progressPercent: 0.0,
+              lastReadTime: file.statSync().modified,
+            );
+          }
+        }
+      });
+
+      final resultList = mergedItems.values.toList()
+        ..sort((a, b) => b.lastReadTime.compareTo(a.lastReadTime));
 
       if (mounted) {
         setState(() {
-          _books = items;
+          _books = resultList;
           _isLoading = false;
         });
       }
     } catch (e) {
-      AppLogger.log('❌ 扫描本地书籍异常: $e');
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      AppLogger.log('❌ 刷新书架异常: $e');
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // 长按删除确认弹窗
-  Future<void> _confirmAndDeleteBook(LocalBookItem book) async {
-    final confirmed = await showModalBottomSheet<bool>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).scaffoldBackgroundColor,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-        ),
-        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
-        child: SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                book.name,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                '占用空间: ${_formatSize(book.size)}',
-                style: const TextStyle(color: Colors.grey, fontSize: 13),
-              ),
-              const SizedBox(height: 16),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                title: const Text('删除本地缓存', style: TextStyle(color: Colors.redAccent)),
-                subtitle: const Text('仅删除手机本地文件，不影响 NAS 云端存储'),
-                onTap: () => Navigator.pop(ctx, true),
-              ),
-              ListTile(
-                leading: const Icon(Icons.close),
-                title: const Text('取消'),
-                onTap: () => Navigator.pop(ctx, false),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+  Future<void> _openOrDownloadBook(BookshelfItem book) async {
+    File targetFile;
 
-    if (confirmed != true) return;
-
-    try {
-      if (book.file.existsSync()) {
-        await book.file.delete();
+    // 若新设备尚未下载此书，先从 NAS 远端下载
+    if (!book.isDownloaded) {
+      if (widget.dio == null || book.remotePath.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('未连接到 NAS 或缺少远端路径，无法下载此书')),
+        );
+        return;
       }
 
-      setState(() {
-        _books.removeWhere((item) => item.name == book.name);
-      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('正在从 NAS 下载《${book.title}》...')),
+      );
 
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已删除《${book.title}》本地缓存')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('删除失败: $e'), backgroundColor: Colors.red),
-      );
+      final appDir = await getApplicationDocumentsDirectory();
+      final savePath = p.join(appDir.path, 'books', book.bookId);
+      final downloadPath = book.remotePath.startsWith('/') ? book.remotePath : '/${book.remotePath}';
+
+      try {
+        await widget.dio!.download(
+          '/api/v1/files/download',
+          savePath,
+          queryParameters: {'path': downloadPath},
+        );
+        targetFile = File(savePath);
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('下载失败: $e'), backgroundColor: Colors.red),
+        );
+        return;
+      }
+    } else {
+      targetFile = book.localFile!;
     }
-  }
 
-  void _openBook(LocalBookItem book) {
+    if (!mounted) return;
+
     if (book.extension == '.txt') {
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => StreamTxtReaderPage(
-            bookId: book.name,
-            file: book.file,
+            bookId: book.bookId,
+            file: targetFile,
             title: book.title,
+            initialByteOffset: book.txtByteOffset ?? 0,
+            onProgressChanged: (byteOffset, progress) {
+              ProgressSyncService.updateProgress(
+                dio: widget.dio,
+                bookId: book.bookId,
+                title: book.title,
+                filePath: book.remotePath,
+                progressPercent: progress,
+                txtByteOffset: byteOffset,
+              );
+            },
           ),
         ),
       ).then((_) => loadLocalBooks());
@@ -182,20 +208,24 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> {
         context,
         MaterialPageRoute(
           builder: (_) => EpubReaderPage(
-            bookId: book.name,
-            file: book.file,
+            bookId: book.bookId,
+            file: targetFile,
             title: book.title,
+            initialCfi: book.epubCfi,
+            onProgressChanged: (cfi, progress) {
+              ProgressSyncService.updateProgress(
+                dio: widget.dio,
+                bookId: book.bookId,
+                title: book.title,
+                filePath: book.remotePath,
+                progressPercent: progress,
+                epubCfi: cfi,
+              );
+            },
           ),
         ),
       ).then((_) => loadLocalBooks());
     }
-  }
-
-  String _formatSize(int bytes) {
-    if (bytes <= 0) return '0 B';
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';
   }
 
   @override
@@ -206,12 +236,15 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            tooltip: '刷新书架',
+            tooltip: '同步远端进度',
             onPressed: loadLocalBooks,
           ),
         ],
       ),
-      body: _buildBody(),
+      body: RefreshIndicator(
+        onRefresh: loadLocalBooks,
+        child: _buildBody(),
+      ),
     );
   }
 
@@ -221,31 +254,23 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> {
     }
 
     if (_books.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.book_outlined, size: 64, color: Colors.grey),
-            const SizedBox(height: 16),
-            const Text(
-              '书架暂无已下载书籍\n请在「NAS 书库」中浏览并点击下载',
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.of(context).size.height * 0.25),
+          const Center(
+            child: Text(
+              '暂无书籍阅读记录\n可前往「NAS 书库」下载并阅读',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey, height: 1.5),
             ),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              icon: const Icon(Icons.cloud_download_outlined),
-              label: const Text('去下载书籍'),
-              onPressed: () {
-                loadLocalBooks();
-              },
-            ),
-          ],
-        ),
+          ),
+        ],
       );
     }
 
     return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
       itemCount: _books.length,
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (context, index) {
@@ -264,16 +289,29 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontWeight: FontWeight.w500),
           ),
-          subtitle: Text(
-            '${_formatSize(book.size)} · ${book.extension.toUpperCase().replaceAll('.', '')}',
-            style: const TextStyle(fontSize: 12, color: Colors.grey),
+          subtitle: Row(
+            children: [
+              Text(
+                '已读 ${(book.progressPercent * 100).toStringAsFixed(1)}%',
+                style: const TextStyle(fontSize: 12, color: Colors.brown),
+              ),
+              const SizedBox(width: 8),
+              if (!book.isDownloaded)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Text('云端记录 · 点击下载', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                ),
+            ],
           ),
-          trailing: IconButton(
-            icon: const Icon(Icons.more_vert, size: 20, color: Colors.grey),
-            onPressed: () => _confirmAndDeleteBook(book),
+          trailing: Icon(
+            book.isDownloaded ? Icons.chevron_right : Icons.cloud_download_outlined,
+            color: Colors.grey,
           ),
-          onTap: () => _openBook(book),
-          onLongPress: () => _confirmAndDeleteBook(book),
+          onTap: () => _openOrDownloadBook(book),
         );
       },
     );

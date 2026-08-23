@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import '../main.dart';
 import '../services/auth_service.dart';
 import '../main_navigation_container.dart';
+import '../services/progress_sync_service.dart';
 
 // --- 登录 / 注册统一页面 ---
 class LoginPage extends StatefulWidget {
@@ -78,6 +79,9 @@ class _LoginPageState extends State<LoginPage> {
       await AuthService.saveToken(token);
 
       final authedDio = NetworkClient.getDio(baseUrl: serverUrl, token: token);
+
+      // 登录成功获取到 authedDio 后：
+      await ProgressSyncService.syncWithRemote(authedDio);
 
       if (!mounted) return;
 

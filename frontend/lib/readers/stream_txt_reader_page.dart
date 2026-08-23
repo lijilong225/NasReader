@@ -9,6 +9,7 @@ import '../core/page_turn_mode.dart';
 import '../core/page_turn_view.dart';
 import '../widgets/typography_config.dart';
 import '../widgets/typography_settings_modal.dart';
+import '../services/app_logger.dart';
 
 class StreamTxtReaderPage extends StatefulWidget {
   final File file;
@@ -33,6 +34,7 @@ class StreamTxtReaderPage extends StatefulWidget {
 class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   late ChunkedTxtEngine _engine;
   bool _isIndexing = true;
+  String? _errorMessage;
   bool _showControls = false;
 
   final Map<int, List<TxtPageSlice>> _chunkPagesCache = {};
@@ -64,32 +66,67 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   }
 
   Future<void> _initEngineAndScanToc() async {
-    final futures = await Future.wait([
-      _engine.buildIndex(),
-      TxtTocExtractor.extractTocInIsolate(widget.file),
-    ]);
+    try {
+      if (!widget.file.existsSync() || widget.file.lengthSync() == 0) {
+        setState(() {
+          _isIndexing = false;
+          _errorMessage = '文件不存在或内容为空';
+        });
+        return;
+      }
 
-    _toc = futures[1] as List<TxtChapterItem>;
+      // 1. 构建分块索引
+      await _engine.buildIndex();
 
-    int targetChunk = 0;
-    for (int i = 0; i < _engine.chunks.length; i++) {
-      if (widget.initialByteOffset >= _engine.chunks[i].startByte &&
-          widget.initialByteOffset < _engine.chunks[i].endByte) {
-        targetChunk = i;
-        break;
+      if (_engine.chunks.isEmpty) {
+        setState(() {
+          _isIndexing = false;
+          _errorMessage = 'TXT 文本分块失败';
+        });
+        return;
+      }
+
+      // 2. 尝试提取目录（加安全兜底，避免目录解析失败阻塞正文渲染）
+      try {
+        _toc = await TxtTocExtractor.extractTocInIsolate(widget.file);
+      } catch (tocErr) {
+        AppLogger.log('⚠️ 提取 TXT 目录异常 (已降级为纯文本模式): $tocErr');
+        _toc = [];
+      }
+
+      int targetChunk = 0;
+      for (int i = 0; i < _engine.chunks.length; i++) {
+        if (widget.initialByteOffset >= _engine.chunks[i].startByte &&
+            widget.initialByteOffset < _engine.chunks[i].endByte) {
+          targetChunk = i;
+          break;
+        }
+      }
+
+      _currentChunkIndex = targetChunk;
+      _updateCurrentChapter(widget.initialByteOffset);
+
+      if (mounted) {
+        setState(() => _isIndexing = false);
+      }
+
+      // 3. 延迟一帧等待尺寸就绪后加载切片
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _loadChunkPages(_currentChunkIndex).then((_) {
+            _preloadAdjacentChunks(_currentChunkIndex);
+          });
+        }
+      });
+    } catch (e, stack) {
+      AppLogger.log('❌ TXT 初始化崩溃: $e\n$stack');
+      if (mounted) {
+        setState(() {
+          _isIndexing = false;
+          _errorMessage = '解析 TXT 文件异常: $e';
+        });
       }
     }
-
-    _currentChunkIndex = targetChunk;
-    _updateCurrentChapter(widget.initialByteOffset);
-
-    setState(() => _isIndexing = false);
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadChunkPages(_currentChunkIndex).then((_) {
-        _preloadAdjacentChunks(_currentChunkIndex);
-      });
-    });
   }
 
   void _updateCurrentChapter(int byteOffset) {
@@ -107,43 +144,45 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
   Size _getContentSize() {
     final mq = MediaQuery.of(context);
-    return Size(
-      mq.size.width - 40,
-      mq.size.height - mq.padding.top - mq.padding.bottom - 80,
-    );
+    final width = (mq.size.width - 40).clamp(200.0, 2000.0);
+    final height = (mq.size.height - mq.padding.top - mq.padding.bottom - 80).clamp(300.0, 3000.0);
+    return Size(width, height);
   }
 
   Future<void> _loadChunkPages(int chunkIdx) async {
     if (chunkIdx < 0 || chunkIdx >= _engine.chunks.length) return;
     if (_chunkPagesCache.containsKey(chunkIdx)) return;
 
-    final contentSize = _getContentSize();
-    final pages = await ChunkedTxtEngine.paginateChunkInIsolate(
-      file: widget.file,
-      chunk: _engine.chunks[chunkIdx],
-      contentSize: contentSize,
-      fontSize: _typoConfig.fontSize,
-      lineHeight: _typoConfig.lineHeight,
-      letterSpacing: _typoConfig.letterSpacing,
-    );
-
-    // 如果开启了段首缩进，对每个切片做缩进转换
-    final processedPages = pages.map((slice) {
-      final processedContent = _typoConfig.indentFirstLine
-          ? TypographyConfig.applyIndent(slice.content)
-          : slice.content;
-      return TxtPageSlice(
-        globalPageIndex: slice.globalPageIndex,
-        startByteOffset: slice.startByteOffset,
-        endByteOffset: slice.endByteOffset,
-        content: processedContent,
+    try {
+      final contentSize = _getContentSize();
+      final pages = await ChunkedTxtEngine.paginateChunkInIsolate(
+        file: widget.file,
+        chunk: _engine.chunks[chunkIdx],
+        contentSize: contentSize,
+        fontSize: _typoConfig.fontSize,
+        lineHeight: _typoConfig.lineHeight,
+        letterSpacing: _typoConfig.letterSpacing,
       );
-    }).toList();
 
-    if (mounted) {
-      setState(() {
-        _chunkPagesCache[chunkIdx] = processedPages;
-      });
+      final processedPages = pages.map((slice) {
+        final processedContent = _typoConfig.indentFirstLine
+            ? TypographyConfig.applyIndent(slice.content)
+            : slice.content;
+        return TxtPageSlice(
+          globalPageIndex: slice.globalPageIndex,
+          startByteOffset: slice.startByteOffset,
+          endByteOffset: slice.endByteOffset,
+          content: processedContent,
+        );
+      }).toList();
+
+      if (mounted) {
+        setState(() {
+          _chunkPagesCache[chunkIdx] = processedPages;
+        });
+      }
+    } catch (e) {
+      AppLogger.log('❌ 分页切片异常 (chunk $chunkIdx): $e');
     }
   }
 
@@ -155,15 +194,16 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
   void _onPageChanged(int indexInCurrentChunk) {
     final currentPages = _chunkPagesCache[_currentChunkIndex] ?? [];
-    if (currentPages.isEmpty) return;
+    if (currentPages.isEmpty || indexInCurrentChunk >= currentPages.length) return;
 
     setState(() => _currentPageInChunk = indexInCurrentChunk);
 
     final currentSlice = currentPages[indexInCurrentChunk];
     _updateCurrentChapter(currentSlice.startByteOffset);
 
+    final totalSize = _engine.totalFileSize > 0 ? _engine.totalFileSize : 1;
     final globalProgress =
-        (currentSlice.endByteOffset / _engine.totalFileSize).clamp(0.0, 1.0);
+        (currentSlice.endByteOffset / totalSize).clamp(0.0, 1.0);
     widget.onProgressChanged?.call(currentSlice.startByteOffset, globalProgress);
 
     _preloadAdjacentChunks(_currentChunkIndex);
@@ -206,8 +246,8 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
       if (pages.isNotEmpty) {
         final slice = pages[targetPageInChunk];
-        final progress =
-            (slice.endByteOffset / _engine.totalFileSize).clamp(0.0, 1.0);
+        final totalSize = _engine.totalFileSize > 0 ? _engine.totalFileSize : 1;
+        final progress = (slice.endByteOffset / totalSize).clamp(0.0, 1.0);
         widget.onProgressChanged?.call(slice.startByteOffset, progress);
       }
     });
@@ -242,6 +282,25 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
               SizedBox(height: 16),
               Text('正在分析大文件章节目录与排版...', style: TextStyle(color: Colors.grey)),
             ],
+          ),
+        ),
+      );
+    }
+
+    if (_errorMessage != null) {
+      return Scaffold(
+        appBar: AppBar(title: Text(widget.title)),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error_outline, size: 56, color: Colors.redAccent),
+                const SizedBox(height: 16),
+                Text(_errorMessage!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.redAccent)),
+              ],
+            ),
           ),
         ),
       );
@@ -283,32 +342,34 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
               ),
             ),
             Expanded(
-              child: ListView.builder(
-                itemCount: _toc.length,
-                itemBuilder: (context, index) {
-                  final item = _toc[index];
-                  final isCurrent = index == _currentChapterIndex;
+              child: _toc.isEmpty
+                  ? const Center(child: Text('未识别到目录章节', style: TextStyle(color: Colors.grey)))
+                  : ListView.builder(
+                      itemCount: _toc.length,
+                      itemBuilder: (context, index) {
+                        final item = _toc[index];
+                        final isCurrent = index == _currentChapterIndex;
 
-                  return ListTile(
-                    dense: true,
-                    title: Text(
-                      item.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight:
-                            isCurrent ? FontWeight.bold : FontWeight.normal,
-                        color: isCurrent ? Colors.brown : Colors.black87,
-                      ),
+                        return ListTile(
+                          dense: true,
+                          title: Text(
+                            item.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight:
+                                  isCurrent ? FontWeight.bold : FontWeight.normal,
+                              color: isCurrent ? Colors.brown : Colors.black87,
+                            ),
+                          ),
+                          trailing: isCurrent
+                              ? const Icon(Icons.bookmark, size: 16, color: Colors.brown)
+                              : null,
+                          onTap: () => _jumpToChapter(item),
+                        );
+                      },
                     ),
-                    trailing: isCurrent
-                        ? const Icon(Icons.bookmark, size: 16, color: Colors.brown)
-                        : null,
-                    onTap: () => _jumpToChapter(item),
-                  );
-                },
-              ),
             ),
           ],
         ),
@@ -316,7 +377,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       body: Stack(
         children: [
           currentPages.isEmpty
-              ? const Center(child: CircularProgressIndicator())
+              ? const Center(child: CircularProgressIndicator(color: Color(0xFF382E25)))
               : PageTurnView(
                   key: _turnViewKey,
                   mode: _pageTurnMode,
@@ -386,9 +447,9 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                     children: [
                       // 1. 进度滑条
                       Slider(
-                        value: _currentChunkIndex.toDouble(),
+                        value: _currentChunkIndex.toDouble().clamp(0.0, (_engine.chunks.length - 1).toDouble()),
                         min: 0,
-                        max: (_engine.chunks.length - 1).toDouble(),
+                        max: (_engine.chunks.length > 1 ? _engine.chunks.length - 1 : 1).toDouble(),
                         onChanged: (val) {
                           final target = val.toInt();
                           setState(() {
@@ -416,7 +477,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                             ),
                           ),
                           Text(
-                            '${((_currentChunkIndex / _engine.chunks.length) * 100).toStringAsFixed(1)}%',
+                            '${((_currentChunkIndex / (_engine.chunks.isNotEmpty ? _engine.chunks.length : 1)) * 100).toStringAsFixed(1)}%',
                             style: const TextStyle(
                                 color: Colors.white70, fontSize: 12),
                           ),
@@ -511,6 +572,8 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
             ? _toc[_currentChapterIndex].title
             : widget.title;
 
+    final totalSize = _engine.totalFileSize > 0 ? _engine.totalFileSize : 1;
+
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -547,14 +610,16 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    '第 ${_currentChapterIndex + 1}/${_toc.length} 章 · ${pageInChunk + 1}/$totalInChunk',
+                    _toc.isNotEmpty
+                        ? '第 ${_currentChapterIndex + 1}/${_toc.length} 章 · ${pageInChunk + 1}/$totalInChunk'
+                        : '页码 ${pageInChunk + 1}/$totalInChunk',
                     style: TextStyle(
                       fontSize: 11,
                       color: _currentTheme.textColor.withOpacity(0.5),
                     ),
                   ),
                   Text(
-                    '${(slice.endByteOffset / _engine.totalFileSize * 100).toStringAsFixed(1)}%',
+                    '${(slice.endByteOffset / totalSize * 100).toStringAsFixed(1)}%',
                     style: TextStyle(
                       fontSize: 11,
                       color: _currentTheme.textColor.withOpacity(0.5),

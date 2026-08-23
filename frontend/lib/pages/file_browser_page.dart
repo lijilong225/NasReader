@@ -72,7 +72,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
         queryParameters: {'path': path},
       );
 
-      AppLogger.log('[FileBrowser] 响应: ${res.data}');
+      // AppLogger.log('[FileBrowser] 响应: ${res.data}');
 
       if (res.statusCode == 200 && res.data != null) {
         List<dynamic> rawList = [];

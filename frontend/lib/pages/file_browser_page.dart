@@ -194,36 +194,67 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
 
   Future<void> _downloadAndOpenFile(String remotePath, String fileName) async {
     try {
-    _showLoadingDialog('正在从 NAS 下载...');
-    final appDir = await getApplicationDocumentsDirectory();
-    final localDir = Directory(p.join(appDir.path, 'books'));
-    if (!localDir.existsSync()) {
-      localDir.createSync(recursive: true);
+      final appDir = await getApplicationDocumentsDirectory();
+      final localDir = Directory(p.join(appDir.path, 'books'));
+      if (!localDir.existsSync()) {
+        localDir.createSync(recursive: true);
+      }
+
+      final savePath = p.join(localDir.path, fileName);
+      final file = File(savePath);
+
+      // 如果尚未缓存，则发起远程下载
+      if (!file.existsSync()) {
+        _showLoadingDialog('正在从 NAS 下载...');
+        await widget.dio.download(
+          '/api/files/download',
+          savePath,
+          queryParameters: {'path': remotePath},
+        );
+        if (mounted) Navigator.pop(context); // 关闭 loading 弹窗
+      }
+
+      // 更新本地缓存标识集合
+      setState(() {
+        _cachedFileNames.add(fileName);
+      });
+
+      final ext = p.extension(fileName).toLowerCase();
+      final title = p.basenameWithoutExtension(fileName);
+
+      if (ext == '.txt') {
+        if (!mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (ctx) => StreamTxtReaderPage(
+              file: file,
+              bookTitle: title,
+              dio: widget.dio,
+            ),
+          ),
+        ).then((_) => _syncLocalCachedFiles());
+      } else if (ext == '.epub') {
+        if (!mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (ctx) => EpubReaderPage(
+              file: file,
+              bookTitle: title,
+              dio: widget.dio,
+            ),
+          ),
+        ).then((_) => _syncLocalCachedFiles());
+      } else {
+        OpenFile.open(savePath);
+      }
+    } catch (e) {
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+      _showToast('打开或下载文件失败: $e');
     }
-
-    final savePath = p.join(localDir.path, fileName);
-    final file = File(savePath);
-
-    if (!file.existsSync()) {
-      await widget.dio.download(
-        '/api/files/download',
-        savePath,
-        queryParameters: {'path': remotePath},
-      );
-    }
-
-    if (mounted) Navigator.pop(context); // 关掉 loading
-
-    // 如果你有 SyncDatabaseService，下载完成后记录一条基础元数据
-    // await SyncDatabaseService(widget.dio).insertOrUpdateBookMeta(fileName, savePath);
-
-    _showToast('缓存成功');
-    
-    // 打开阅读器...
-  } catch (e) {
-    if (mounted) Navigator.pop(context);
-    _showToast('下载失败: $e');
-  }
   }
 
   void _navigateBack() {

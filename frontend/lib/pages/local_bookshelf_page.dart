@@ -79,27 +79,26 @@ class _LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBin
   }
 
   void _openBook(File file) {
-    final fileName = p.basename(file.path);
-    final ext = p.extension(file.path).toLowerCase();
     final title = p.basenameWithoutExtension(file.path);
+    final ext = p.extension(file.path).toLowerCase();
 
     if (ext == '.txt') {
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (ctx) => StreamTxtReaderPage(
-            filePath: file.path,
+            file: file, // 替换 filePath: file.path
             bookTitle: title,
             dio: widget.dio,
           ),
         ),
-      ).then((_) => _loadLocalBooks()); // 从阅读器返回时刷新进度
+      ).then((_) => _loadLocalBooks());
     } else if (ext == '.epub') {
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (ctx) => EpubReaderPage(
-            filePath: file.path,
+            file: file, // 替换 filePath: file.path
             bookTitle: title,
             dio: widget.dio,
           ),

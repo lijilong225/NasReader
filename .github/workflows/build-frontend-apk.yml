@@ -1,0 +1,59 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*.*.*" ]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/build-frontend-apk.yml"
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.x' # 或填 stable
+          channel: 'stable'
+          cache: true
+
+      - name: Install Flutter Dependencies
+        working-directory: ./frontend # 若在根目录则删除本行
+        run: flutter pub get
+
+      - name: Build Release APK
+        working-directory: ./frontend
+        run: |
+          # 构建全量通用包 (Fat APK)
+          flutter build apk --release
+
+      - name: Upload APK to Artifacts (临时下载)
+        uses: actions/upload-artifact@v4
+        with:
+          name: nas-reader-android-apk
+          path: frontend/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
+
+      - name: Publish Release (仅打 Tag 时触发)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: frontend/build/app/outputs/flutter-apk/app-release.apk
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

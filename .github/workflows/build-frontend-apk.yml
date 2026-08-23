@@ -36,8 +36,19 @@ jobs:
         working-directory: ./frontend
         run: flutter pub get
 
+      # 关键步骤：从 GitHub Secrets 还原固定的 release.jks 密钥到 frontend/android/app/
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > frontend/android/app/release.jks
+
+      # 编译 Release APK 并注入签名环境变量
       - name: Build Release APK
         working-directory: ./frontend
+        env:
+          KEYSTORE_PATH: "release.jks"
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           flutter build apk --release --android-skip-build-dependency-validation
 

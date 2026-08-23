@@ -55,6 +55,20 @@ android {
         multiDexEnabled true
     }
 
+    signingConfigs {
+        release {
+            // 如果环境变量中有签名文件，则使用正式签名；否则回退到 debug 签名
+            if (System.getenv("KEYSTORE_PATH") != null) {
+                storeFile file(System.getenv("KEYSTORE_PATH"))
+                storePassword System.getenv("KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KEY_ALIAS")
+                keyPassword System.getenv("KEY_PASSWORD")
+            } else {
+                signingConfig signingConfigs.debug
+            }
+        }
+    }
+
     buildTypes {
         release {
             // 生产包默认使用 debug 签名方便直接测试，或在此配置 release 签名

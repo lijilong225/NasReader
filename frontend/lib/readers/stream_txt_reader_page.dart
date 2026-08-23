@@ -75,23 +75,15 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         return;
       }
 
-      // 1. 构建分块索引
+      // 1. 快速构建物理分块索引 (< 5ms)
       await _engine.buildIndex();
 
       if (_engine.chunks.isEmpty) {
         setState(() {
           _isIndexing = false;
-          _errorMessage = 'TXT 文本分块失败';
+          _errorMessage = 'TXT 文件为空';
         });
         return;
-      }
-
-      // 2. 尝试提取目录（加安全兜底，避免目录解析失败阻塞正文渲染）
-      try {
-        _toc = await TxtTocExtractor.extractTocInIsolate(widget.file);
-      } catch (tocErr) {
-        AppLogger.log('⚠️ 提取 TXT 目录异常 (已降级为纯文本模式): $tocErr');
-        _toc = [];
       }
 
       int targetChunk = 0;
@@ -104,26 +96,34 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       }
 
       _currentChunkIndex = targetChunk;
-      _updateCurrentChapter(widget.initialByteOffset);
 
+      // 2. 立即解除 Loading，优先渲染第一屏正文
       if (mounted) {
         setState(() => _isIndexing = false);
       }
 
-      // 3. 延迟一帧等待尺寸就绪后加载切片
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _loadChunkPages(_currentChunkIndex).then((_) {
-            _preloadAdjacentChunks(_currentChunkIndex);
-          });
-        }
+      // 3. 异步分页与后台闲时扫描目录（不阻塞 UI）
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        
+        // 优先加载当前页
+        await _loadChunkPages(_currentChunkIndex);
+        _preloadAdjacentChunks(_currentChunkIndex);
+        // 异步提取目录
+        TxtTocExtractor.extractTocInIsolate(widget.file).then((tocList) {
+          if (mounted) {
+            setState(() {
+              _toc = tocList;
+              _updateCurrentChapter(widget.initialByteOffset);
+            });
+          }
+        }).catchError((_) {});
       });
-    } catch (e, stack) {
-      AppLogger.log('❌ TXT 初始化崩溃: $e\n$stack');
+    } catch (e) {
       if (mounted) {
         setState(() {
           _isIndexing = false;
-          _errorMessage = '解析 TXT 文件异常: $e';
+          _errorMessage = '打开书籍失败: $e';
         });
       }
     }

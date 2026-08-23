@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import '../main.dart';
 import '../services/auth_service.dart';
 
+// --- 登录 / 注册统一页面 ---
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -13,17 +14,26 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   final _formKey = GlobalKey<FormState>();
-  final _serverController = TextEditingController();
+  final _serverController =
+      TextEditingController(text: serverHost);
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
 
+  bool _isRegisterMode = false;
   bool _isLoading = false;
-  bool _obscurePassword = true;
+  String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    _serverController.text = serverHost;
+    _loadSavedServerUrl();
+  }
+
+  Future<void> _loadSavedServerUrl() async {
+    final savedUrl = await AuthService.getBaseUrl();
+    setState(() {
+      _serverController.text = savedUrl;
+    });
   }
 
   @override
@@ -34,196 +44,187 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
-  Future<void> _handleLogin() async {
+  Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
 
-    final rawServer = _serverController.text.trim();
+    final serverUrl = _serverController.text.trim();
     final username = _usernameController.text.trim();
-    final password = _passwordController.text.trim();
+    final password = _passwordController.text;
 
     try {
-      // 1. 获取并清洗 BaseUrl
-      final cleanedServer = NetworkClient.sanitizeBaseUrl(rawServer);
-      serverHost = cleanedServer;
+      final dio = NetworkClient.getDio(baseUrl: serverUrl);
+      final path =
+          _isRegisterMode ? '/api/v1/auth/register' : '/api/v1/auth/login';
 
-      // 2. 初始化独立临时 Dio 实例发起登录请求
-      final tempDio = Dio(
-        BaseOptions(
-          baseUrl: cleanedServer,
-          connectTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 15),
-          contentType: 'application/json',
-        ),
-      );
-
-      final response = await tempDio.post(
-        '/api/auth/login',
+      final response = await dio.post(
+        path,
         data: {
           'username': username,
           'password': password,
         },
       );
 
-      if (response.statusCode == 200 && response.data['code'] == 0) {
-        final data = response.data['data'];
-        final token = data['token'] ?? '';
+      final token = response.data['token'] as String;
 
-        // 3. 存储 Token
-        await AuthService.saveToken(token);
+      await AuthService.saveBaseUrl(serverUrl);
+      await AuthService.saveToken(token);
 
-        // 4. 重置全局 NetworkClient 实例，使其加载最新 Token 与 BaseUrl
-        NetworkClient.reset();
-        NetworkClient.getDio(baseUrl: cleanedServer, token: token);
+      final authedDio = NetworkClient.getDio(baseUrl: serverUrl, token: token);
 
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('登录成功')),
-        );
+      if (!mounted) return;
 
-        // 5. 跳转到主页面
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (context) => const MainNavigationContainer()),
-          (route) => false,
-        );
-      } else {
-        final msg = response.data['msg'] ?? '账号或密码错误';
-        _showToast(msg);
-      }
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => MainNavigationContainer(dio: authedDio),
+        ),
+      );
     } on DioException catch (e) {
-      String errorMsg = '网络连接失败';
-      if (e.response?.statusCode == 404) {
-        errorMsg = '登录接口 404：请确认服务器地址与后端路由 /api/auth/login';
-      } else if (e.type == DioExceptionType.connectionTimeout) {
-        errorMsg = '连接超时，请检查 NAS IP 与端口是否可达';
-      } else if (e.response?.data != null && e.response?.data['msg'] != null) {
-        errorMsg = e.response?.data['msg'];
+      String msg = '网络连接失败，请检查服务器地址';
+      if (e.response != null && e.response?.data != null) {
+        msg = e.response?.data['error'] ??
+            e.response?.data['message'] ??
+            '请求失败';
       }
-      _showToast(errorMsg);
+      setState(() {
+        _errorMessage = msg;
+      });
     } catch (e) {
-      _showToast('发生未知错误: $e');
+      setState(() {
+        _errorMessage = '发生错误: $e';
+      });
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
-  }
-
-  void _showToast(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: Colors.red.shade700),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 28.0),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 400),
             child: Form(
               key: _formKey,
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(
+                  const Icon(
                     Icons.auto_stories,
-                    size: 72,
-                    color: Theme.of(context).primaryColor,
+                    size: 64,
+                    color: Color(0xFF382E25),
                   ),
                   const SizedBox(height: 16),
-                  const Text(
-                    'NAS Reader',
+                  Text(
+                    _isRegisterMode ? '创建阅读器账号' : '登录 NAS 同步服务',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF382E25),
+                    ),
                   ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    '连接您的私人 NAS 书库',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 14, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 36),
+                  const SizedBox(height: 32),
 
-                  // 服务器地址
+                  // 服务端 URL
                   TextFormField(
                     controller: _serverController,
-                    decoration: const InputDecoration(
-                      labelText: 'NAS 服务器地址',
-                      hintText: 'http://192.168.5.3:6088',
+                    decoration: InputDecoration(
+                      labelText: '后端服务地址',
+                      hintText: serverHost,
                       prefixIcon: Icon(Icons.dns_outlined),
                       border: OutlineInputBorder(),
                     ),
-                    validator: (val) {
-                      if (val == null || val.trim().isEmpty) {
-                        return '请输入服务器地址';
-                      }
-                      return null;
-                    },
+                    validator: (v) =>
+                        (v == null || v.isEmpty) ? '请输入服务器 URL' : null,
                   ),
                   const SizedBox(height: 16),
 
                   // 用户名
                   TextFormField(
                     controller: _usernameController,
-                    decoration: const InputDecoration(
-                      labelText: '账号',
+                    decoration: InputDecoration(
+                      labelText: '用户名',
                       prefixIcon: Icon(Icons.person_outline),
                       border: OutlineInputBorder(),
                     ),
-                    validator: (val) {
-                      if (val == null || val.trim().isEmpty) {
-                        return '请输入账号';
-                      }
-                      return null;
-                    },
+                    validator: (v) =>
+                        (v == null || v.trim().length < 3) ? '用户名至少 3 个字符' : null,
                   ),
                   const SizedBox(height: 16),
 
                   // 密码
                   TextFormField(
                     controller: _passwordController,
-                    obscureText: _obscurePassword,
+                    obscureText: true,
                     decoration: InputDecoration(
                       labelText: '密码',
-                      prefixIcon: const Icon(Icons.lock_outline),
-                      border: const OutlineInputBorder(),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _obscurePassword ? Icons.visibility_off : Icons.visibility,
-                        ),
-                        onPressed: () {
-                          setState(() => _obscurePassword = !_obscurePassword);
-                        },
-                      ),
+                      prefixIcon: Icon(Icons.lock_outline),
+                      border: OutlineInputBorder(),
                     ),
-                    validator: (val) {
-                      if (val == null || val.trim().isEmpty) {
-                        return '请输入密码';
-                      }
-                      return null;
-                    },
+                    validator: (v) =>
+                        (v == null || v.length < 6) ? '密码长度至少 6 位' : null,
                   ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 16),
 
-                  // 登录按钮
-                  ElevatedButton(
-                    onPressed: _isLoading ? null : _handleLogin,
-                    style: ElevatedButton.styleFrom(
+                  if (_errorMessage != null) ...[
+                    Text(
+                      _errorMessage!,
+                      style: const TextStyle(color: Colors.red, fontSize: 13),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+
+                  // 提交按钮
+                  FilledButton(
+                    onPressed: _isLoading ? null : _submit,
+                    style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
+                      backgroundColor: const Color(0xFF382E25),
                     ),
                     child: _isLoading
                         ? const SizedBox(
                             height: 20,
                             width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
                           )
-                        : const Text('登 录', style: TextStyle(fontSize: 16)),
+                        : Text(
+                            _isRegisterMode ? '立即注册' : '登 录',
+                            style: const TextStyle(fontSize: 16),
+                          ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // 模式切换
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _isRegisterMode = !_isRegisterMode;
+                        _errorMessage = null;
+                      });
+                    },
+                    child: Text(
+                      _isRegisterMode
+                          ? '已有账号？返回登录'
+                          : '没有账号？点击注册新用户',
+                      style: const TextStyle(color: Color(0xFF382E25)),
+                    ),
                   ),
                 ],
               ),

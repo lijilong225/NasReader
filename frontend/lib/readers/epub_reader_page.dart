@@ -91,11 +91,9 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
         return;
       }
 
-      // 1. 读取文件字节并转为 Base64
       final bytes = await widget.file.readAsBytes();
       final base64Epub = base64Encode(bytes);
 
-      // 2. 初始化 WebViewController
       _webViewController = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(const Color(0xFFF6EFE2))
@@ -120,7 +118,6 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
         AndroidWebViewController.enableDebugging(true);
       }
 
-      // 3. 构建并加载带有增强型手势和跳转脚本的 HTML
       final html = _buildEpubViewerHtml(base64Epub, widget.initialCfi);
       await _webViewController.loadHtmlString(html, baseUrl: 'https://localhost/');
     } catch (e) {
@@ -163,10 +160,6 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
           }
           break;
 
-        case 'onTapCenter':
-          if (mounted) setState(() => _showControls = !_showControls);
-          break;
-
         case 'onError':
           if (mounted) {
             setState(() {
@@ -193,7 +186,14 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.88/dist/epub.min.js"></script>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    * { 
+      margin: 0; 
+      padding: 0; 
+      box-sizing: border-box; 
+      -webkit-tap-highlight-color: transparent; 
+      user-select: none;
+      -webkit-user-select: none;
+    }
     html, body, #viewer { width: 100vw; height: 100vh; overflow: hidden; background: #F6EFE2; }
   </style>
 </head>
@@ -259,7 +259,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
         }));
       });
 
-      // 准确的热区点击与滑动防误触处理
+      // 彻底禁用 epub.js 自带的穿透点击翻页，完全由 Flutter 层精确接管
       rendition.on("rendered", function(section, iframeView) {
         const iframeDoc = iframeView.document;
         if (!iframeDoc) return;
@@ -268,53 +268,12 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
           e.preventDefault();
           e.stopPropagation();
         }, true);
-
-        let startX = 0;
-        let startY = 0;
-        let isMoved = false;
-
-        iframeDoc.addEventListener("touchstart", function(e) {
-          if (e.touches.length === 1) {
-            startX = e.touches[0].clientX;
-            startY = e.touches[0].clientY;
-            isMoved = false;
-          }
-        }, { passive: false });
-
-        iframeDoc.addEventListener("touchmove", function(e) {
-          if (e.touches.length === 1) {
-            const dx = Math.abs(e.touches[0].clientX - startX);
-            const dy = Math.abs(e.touches[0].clientY - startY);
-            if (dx > 12 || dy > 12) {
-              isMoved = true;
-            }
-          }
-        }, { passive: true });
-
-        iframeDoc.addEventListener("touchend", function(e) {
-          if (isMoved) return;
-
-          e.preventDefault();
-          e.stopPropagation();
-
-          const screenWidth = window.innerWidth || iframeDoc.documentElement.clientWidth || document.body.clientWidth;
-          const clickX = startX;
-
-          if (clickX < screenWidth * 0.3) {
-            rendition.prev();
-          } else if (clickX > screenWidth * 0.7) {
-            rendition.next();
-          } else {
-            FlutterChannel.postMessage(JSON.stringify({ type: 'onTapCenter' }));
-          }
-        }, { passive: false });
       });
 
       window.nextPage = () => rendition.next();
       window.prevPage = () => rendition.prev();
       window.goToCfi = (cfi) => rendition.display(cfi);
       
-      // 增强型目录跳转：支持 href、相对路径、Spine 检索与锚点容错
       window.goToHref = function(href) {
         if (!href) return;
         const targetHref = href.trim();
@@ -456,7 +415,57 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
       ),
       body: Stack(
         children: [
+          // 1. 底层 WebView 容器
           WebViewWidget(controller: _webViewController),
+
+          // 2. 核心修复：Flutter 顶层透明手势热区分流（30% 左 / 40% 中 / 30% 右）
+          if (!_isLoading && _errorMessage == null)
+            Positioned.fill(
+              child: Row(
+                children: [
+                  // 左侧 30%：上一页
+                  Expanded(
+                    flex: 3,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: () {
+                        if (_showControls) {
+                          setState(() => _showControls = false);
+                        } else {
+                          _prevPage();
+                        }
+                      },
+                    ),
+                  ),
+
+                  // 中间 40%：唤起 / 隐藏菜单
+                  Expanded(
+                    flex: 4,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: () {
+                        setState(() => _showControls = !_showControls);
+                      },
+                    ),
+                  ),
+
+                  // 右侧 30%：下一页
+                  Expanded(
+                    flex: 3,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: () {
+                        if (_showControls) {
+                          setState(() => _showControls = false);
+                        } else {
+                          _nextPage();
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
           if (_isLoading)
             const Center(
@@ -478,6 +487,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
               ),
             ),
 
+          // 顶部控制条
           if (_showControls)
             Positioned(
               top: 0,
@@ -511,6 +521,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
               ),
             ),
 
+          // 底部控制条
           if (_showControls)
             Positioned(
               bottom: 0,

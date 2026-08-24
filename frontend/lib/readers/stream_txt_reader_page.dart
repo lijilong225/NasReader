@@ -42,6 +42,10 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   int _currentPageInChunk = 0;
   int _currentSavedOffset = 0;
 
+  // 关键防死循环控制标志
+  bool _isJumping = false;
+  int _lastReportedOffset = -1;
+
   List<TxtChapterItem> _toc = [];
   int _currentChapterIndex = 0;
 
@@ -52,7 +56,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   final GlobalKey<PageTurnViewState> _turnViewKey = GlobalKey<PageTurnViewState>();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  // 严格固定的内边距与栏高常量，保证计算与渲染 100% 严丝合缝
   static const double kHorizontalPadding = 20.0;
   static const double kVerticalPadding = 12.0;
   static const double kHeaderHeight = 22.0;
@@ -70,7 +73,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
   @override
   void dispose() {
-    // 退出前强制保存一次当前精确进度
     _saveCurrentProgress();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
@@ -80,6 +82,9 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     final currentPages = _chunkPagesCache[_currentChunkIndex] ?? [];
     if (currentPages.isNotEmpty && _currentPageInChunk < currentPages.length) {
       final slice = currentPages[_currentPageInChunk];
+      if (slice.startByteOffset == _lastReportedOffset) return;
+      _lastReportedOffset = slice.startByteOffset;
+
       final totalSize = _engine.totalFileSize > 0 ? _engine.totalFileSize : 1;
       final progress = (slice.endByteOffset / totalSize).clamp(0.0, 1.0);
       widget.onProgressChanged?.call(slice.startByteOffset, progress);
@@ -96,7 +101,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         return;
       }
 
-      // 1. 物理索引秒建
       await _engine.buildIndex();
 
       if (_engine.chunks.isEmpty) {
@@ -107,7 +111,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         return;
       }
 
-      // 2. 定位目标分块
       int targetChunk = 0;
       for (int i = 0; i < _engine.chunks.length; i++) {
         if (_currentSavedOffset >= _engine.chunks[i].startByte &&
@@ -119,20 +122,16 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
       _currentChunkIndex = targetChunk;
 
-      // 3. 立即准备渲染首屏，解除全局 Loading 状态
       if (mounted) {
         setState(() => _isIndexing = false);
       }
 
-      // 4. 第一帧后加载当前块
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
         
-        // 加载当前分块并定位
-        await _loadChunkPages(targetChunk, targetByteOffset: _currentSavedOffset);
+        await _loadChunkPages(targetChunk, targetByteOffset: _currentSavedOffset, isCurrentDisplayChunk: true);
 
-        // 5. 延迟 200ms 执行后台预加载和目录扫描，绝不抢占首屏 CPU
-        Future.delayed(const Duration(milliseconds: 200), () {
+        Future.delayed(const Duration(milliseconds: 250), () {
           if (!mounted) return;
           _preloadAdjacentChunks(targetChunk);
 
@@ -167,10 +166,11 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         break;
       }
     }
-    _currentChapterIndex = activeIdx;
+    if (_currentChapterIndex != activeIdx) {
+      setState(() => _currentChapterIndex = activeIdx);
+    }
   }
 
-  // 精准计算正文区域的可用宽高
   Size _getContentSize() {
     final mq = MediaQuery.of(context);
     final availableWidth = mq.size.width - (kHorizontalPadding * 2);
@@ -181,7 +181,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         kHeaderHeight -
         kFooterHeight -
         kHeaderSpacing -
-        16.0; // 👈 增加 16px 底部绝对安全间距
+        16.0;
 
     return Size(
       availableWidth.clamp(100.0, 3000.0),
@@ -189,38 +189,50 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     );
   }
 
-  Future<void> _loadChunkPages(int chunkIdx, {int? targetByteOffset}) async {
+  // 核心修复：区分是否为“当前显示分块”，严禁预加载时污染 _currentChunkIndex
+  Future<void> _loadChunkPages(
+    int chunkIdx, {
+    int? targetByteOffset,
+    bool isCurrentDisplayChunk = false,
+  }) async {
     if (chunkIdx < 0 || chunkIdx >= _engine.chunks.length) return;
 
-    // 1. 如果该分块已缓存，直接复用缓存并跳转目标页
+    // 1. 命中缓存
     if (_chunkPagesCache.containsKey(chunkIdx)) {
-      final cachedPages = _chunkPagesCache[chunkIdx]!;
-      int targetPage = 0;
-      if (targetByteOffset != null && cachedPages.isNotEmpty) {
-        for (int p = 0; p < cachedPages.length; p++) {
-          final isLastPage = (p == cachedPages.length - 1);
-          if (targetByteOffset >= cachedPages[p].startByteOffset &&
-              (targetByteOffset < cachedPages[p].endByteOffset || isLastPage)) {
-            targetPage = p;
-            break;
+      if (isCurrentDisplayChunk) {
+        final cachedPages = _chunkPagesCache[chunkIdx]!;
+        int targetPage = 0;
+        if (targetByteOffset != null && cachedPages.isNotEmpty) {
+          for (int p = 0; p < cachedPages.length; p++) {
+            final isLastPage = (p == cachedPages.length - 1);
+            if (targetByteOffset >= cachedPages[p].startByteOffset &&
+                (targetByteOffset < cachedPages[p].endByteOffset || isLastPage)) {
+              targetPage = p;
+              break;
+            }
           }
         }
+
+        setState(() {
+          _currentChunkIndex = chunkIdx;
+          _currentPageInChunk = targetPage;
+        });
+
+        _isJumping = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _turnViewKey.currentState?.jumpToPage(targetPage);
+            Future.delayed(const Duration(milliseconds: 150), () {
+              if (mounted) _isJumping = false;
+            });
+            _saveCurrentProgress();
+          }
+        });
       }
-
-      setState(() {
-        _currentChunkIndex = chunkIdx;
-        _currentPageInChunk = targetPage;
-      });
-
-      // 确保在下一帧完成跳转与进度保存
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _turnViewKey.currentState?.jumpToPage(targetPage);
-        _saveCurrentProgress();
-      });
       return;
     }
 
-    // 2. 缓存未命中，进行 Isolate 排版测算
+    // 2. 缓存未命中，在 Isolate 中排版
     try {
       final contentSize = _getContentSize();
       final pages = await ChunkedTxtEngine.paginateChunkInIsolate(
@@ -246,29 +258,36 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
       if (!mounted) return;
 
-      int targetPage = 0;
-      if (targetByteOffset != null && processedPages.isNotEmpty) {
-        for (int p = 0; p < processedPages.length; p++) {
-          final isLastPage = (p == processedPages.length - 1);
-          if (targetByteOffset >= processedPages[p].startByteOffset &&
-              (targetByteOffset < processedPages[p].endByteOffset || isLastPage)) {
-            targetPage = p;
-            break;
+      _chunkPagesCache[chunkIdx] = processedPages;
+
+      // 仅当加载的是当前展示块时，才刷新 UI 与执行跳页
+      if (isCurrentDisplayChunk) {
+        int targetPage = 0;
+        if (targetByteOffset != null && processedPages.isNotEmpty) {
+          for (int p = 0; p < processedPages.length; p++) {
+            final isLastPage = (p == processedPages.length - 1);
+            if (targetByteOffset >= processedPages[p].startByteOffset &&
+                (targetByteOffset < processedPages[p].endByteOffset || isLastPage)) {
+              targetPage = p;
+              break;
+            }
           }
         }
-      }
 
-      setState(() {
-        _chunkPagesCache[chunkIdx] = processedPages;
-        if (chunkIdx == _currentChunkIndex) {
+        setState(() {
+          _currentChunkIndex = chunkIdx;
           _currentPageInChunk = targetPage;
-        }
-      });
+        });
 
-      if (chunkIdx == _currentChunkIndex) {
+        _isJumping = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          _turnViewKey.currentState?.jumpToPage(targetPage);
-          _saveCurrentProgress();
+          if (mounted) {
+            _turnViewKey.currentState?.jumpToPage(targetPage);
+            Future.delayed(const Duration(milliseconds: 150), () {
+              if (mounted) _isJumping = false;
+            });
+            _saveCurrentProgress();
+          }
         });
       }
     } catch (e) {
@@ -277,22 +296,29 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   }
 
   void _preloadAdjacentChunks(int currentIdx) {
-    if (currentIdx + 1 < _engine.chunks.length) _loadChunkPages(currentIdx + 1);
-    if (currentIdx - 1 >= 0) _loadChunkPages(currentIdx - 1);
-    _chunkPagesCache.removeWhere((idx, _) => (idx - currentIdx).abs() > 3);
+    if (currentIdx + 1 < _engine.chunks.length) {
+      _loadChunkPages(currentIdx + 1, isCurrentDisplayChunk: false);
+    }
+    if (currentIdx - 1 >= 0) {
+      _loadChunkPages(currentIdx - 1, isCurrentDisplayChunk: false);
+    }
+    // 释放过远缓存
+    _chunkPagesCache.removeWhere((idx, _) => (idx - currentIdx).abs() > 2);
   }
 
   void _onPageChanged(int indexInCurrentChunk) {
+    // 处于代码控制的主动跳转过程中，直接忽略翻页回调
+    if (_isJumping) return;
+
     final currentPages = _chunkPagesCache[_currentChunkIndex] ?? [];
     if (currentPages.isEmpty || indexInCurrentChunk >= currentPages.length) return;
 
-    setState(() => _currentPageInChunk = indexInCurrentChunk);
+    _currentPageInChunk = indexInCurrentChunk;
 
     final currentSlice = currentPages[indexInCurrentChunk];
     _currentSavedOffset = currentSlice.startByteOffset;
     _updateCurrentChapter(currentSlice.startByteOffset);
 
-    // 实时保存进度
     _saveCurrentProgress();
     _preloadAdjacentChunks(_currentChunkIndex);
   }
@@ -302,7 +328,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
     if (_engine.chunks.isEmpty) return;
 
-    // 1. 查找目标偏移量所在的 Chunk 分块
     int targetChunk = 0;
     for (int i = 0; i < _engine.chunks.length; i++) {
       if (chapter.startByteOffset >= _engine.chunks[i].startByte &&
@@ -312,17 +337,18 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       }
     }
 
-    // 2. 标记当前保存的章节状态
     setState(() {
       _currentChapterIndex = chapter.index;
       _currentSavedOffset = chapter.startByteOffset;
       _showControls = false;
     });
 
-    // 3. 等待目标分块加载并计算出具体页码
-    await _loadChunkPages(targetChunk, targetByteOffset: chapter.startByteOffset);
+    await _loadChunkPages(
+      targetChunk,
+      targetByteOffset: chapter.startByteOffset,
+      isCurrentDisplayChunk: true,
+    );
 
-    // 4. 异步静默预加载相邻分块
     _preloadAdjacentChunks(targetChunk);
   }
 
@@ -335,7 +361,11 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
           _typoConfig = newConfig;
           _chunkPagesCache.clear();
         });
-        _loadChunkPages(_currentChunkIndex, targetByteOffset: _currentSavedOffset).then((_) {
+        _loadChunkPages(
+          _currentChunkIndex,
+          targetByteOffset: _currentSavedOffset,
+          isCurrentDisplayChunk: true,
+        ).then((_) {
           _preloadAdjacentChunks(_currentChunkIndex);
         });
       },
@@ -503,12 +533,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                           max: (_engine.chunks.length > 1 ? _engine.chunks.length - 1 : 1).toDouble(),
                           onChanged: (val) {
                             final target = val.toInt();
-                            setState(() {
-                              _currentChunkIndex = target;
-                              _currentPageInChunk = 0;
-                            });
-                            _loadChunkPages(target).then((_) {
-                              _turnViewKey.currentState?.jumpToPage(0);
+                            _loadChunkPages(target, isCurrentDisplayChunk: true).then((_) {
                               _preloadAdjacentChunks(target);
                             });
                           },
@@ -562,7 +587,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                         ),
                         const SizedBox(height: 10),
 
-                        // 3. 排版设置弹窗与主题切换
+                        // 3. 排版与主题切换
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
@@ -632,7 +657,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 顶部章节名
             SizedBox(
               height: kHeaderHeight,
               child: Text(
@@ -646,7 +670,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
             ),
             const SizedBox(height: kHeaderSpacing),
 
-            // 正文内容（锁定行高与基线）
             Expanded(
               child: Align(
                 alignment: Alignment.topLeft,
@@ -668,7 +691,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
               ),
             ),
 
-            // 底部信息栏
             SizedBox(
               height: kFooterHeight,
               child: Row(

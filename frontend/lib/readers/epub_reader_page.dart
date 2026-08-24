@@ -447,7 +447,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
               left: 0,
               right: 0,
               child: Container(
-                color: Colors.black.withOpacity(0.85),
+                color: Colors.black.withValues(alpha: 0.85),
                 child: SafeArea(
                   bottom: false,
                   child: Row(
@@ -480,7 +480,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
               left: 0,
               right: 0,
               child: Container(
-                color: Colors.black.withOpacity(0.92),
+                color: Colors.black.withValues(alpha: 0.92),
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 child: SafeArea(
                   top: false,
@@ -514,7 +514,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                             label: Text(mode.label),
                             selected: isSelected,
                             selectedColor: const Color(0xFF5A4A3A),
-                            backgroundColor: Colors.white.withOpacity(0.12),
+                            backgroundColor: Colors.white.withValues(alpha: 0.12),
                             checkmarkColor: Colors.white,
                             showCheckmark: false,
                             side: BorderSide(

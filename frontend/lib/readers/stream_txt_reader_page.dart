@@ -409,7 +409,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                 left: 0,
                 right: 0,
                 child: Container(
-                  color: Colors.black.withOpacity(0.85),
+                  color: Colors.black.withValues(alpha: 0.85),
                   child: SafeArea(
                     bottom: false,
                     child: Row(
@@ -446,7 +446,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                 left: 0,
                 right: 0,
                 child: Container(
-                  color: Colors.black.withOpacity(0.92),
+                  color: Colors.black.withValues(alpha: 0.92),
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   child: SafeArea(
                     top: false,
@@ -499,7 +499,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                               label: Text(mode.label),
                               selected: isSelected,
                               selectedColor: const Color(0xFF5A4A3A),
-                              backgroundColor: Colors.white.withOpacity(0.85),
+                              backgroundColor: Colors.white.withValues(alpha: 0.85),
                               checkmarkColor: Colors.white,
                               showCheckmark: false,
                               side: BorderSide(
@@ -596,7 +596,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                 currentChapterTitle,
                 style: TextStyle(
                   fontSize: 11,
-                  color: _currentTheme.textColor.withOpacity(0.5),
+                  color: _currentTheme.textColor.withValues(alpha: 0.5),
                 ),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -629,14 +629,14 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                         : '页码 ${pageInChunk + 1}/$totalInChunk',
                     style: TextStyle(
                       fontSize: 11,
-                      color: _currentTheme.textColor.withOpacity(0.5),
+                      color: _currentTheme.textColor.withValues(alpha: 0.5),
                     ),
                   ),
                   Text(
                     '${(slice.endByteOffset / totalSize * 100).toStringAsFixed(1)}%',
                     style: TextStyle(
                       fontSize: 11,
-                      color: _currentTheme.textColor.withOpacity(0.5),
+                      color: _currentTheme.textColor.withValues(alpha: 0.5),
                     ),
                   ),
                 ],

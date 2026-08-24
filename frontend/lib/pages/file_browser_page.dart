@@ -3,11 +3,23 @@ import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
 import '../services/progress_sync_service.dart';
 import '../services/app_logger.dart';
+
+enum FileSortType {
+  nameAsc('名称 (A-Z)'),
+  nameDesc('名称 (Z-A)'),
+  sizeAsc('体积 (从小到大)'),
+  sizeDesc('体积 (从大到小)'),
+  type('按文件类型');
+
+  final String label;
+  const FileSortType(this.label);
+}
 
 class NasFileItem {
   final String name;
@@ -42,21 +54,82 @@ class FileBrowserPage extends StatefulWidget {
 }
 
 class FileBrowserPageState extends State<FileBrowserPage> {
+  static const String _sortPrefKey = 'nas_file_sort_type';
+
   String _currentPath = '/';
   List<NasFileItem> _items = [];
   bool _isLoading = true;
   String? _errorMessage;
 
-  // 记录本地已缓存的文件名集合
+  // 默认排序：按名称升序
+  FileSortType _currentSort = FileSortType.nameAsc;
+
   final Set<String> _cachedFileNames = {};
 
   @override
   void initState() {
     super.initState();
-    _loadDirectory(_currentPath);
+    _initAndLoad();
   }
 
-  // 1. 扫描本地 books 目录，更新已缓存集合
+  Future<void> _initAndLoad() async {
+    await _loadSavedSortPreference();
+    await _loadDirectory(_currentPath);
+  }
+
+  // 1. 读取上次持久化的排序规则
+  Future<void> _loadSavedSortPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedSortName = prefs.getString(_sortPrefKey);
+      if (savedSortName != null) {
+        _currentSort = FileSortType.values.firstWhere(
+          (e) => e.name == savedSortName,
+          orElse: () => FileSortType.nameAsc,
+        );
+      }
+    } catch (_) {}
+  }
+
+  // 2. 切换并持久化排序规则
+  Future<void> _changeSort(FileSortType newSort) async {
+    setState(() {
+      _currentSort = newSort;
+      _applySort();
+    });
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_sortPrefKey, newSort.name);
+    } catch (e) {
+      AppLogger.log('❌ 保存排序配置失败: $e');
+    }
+  }
+
+  // 3. 排序执行逻辑（文件夹永远置顶）
+  void _applySort() {
+    _items.sort((a, b) {
+      if (a.isDir && !b.isDir) return -1;
+      if (!a.isDir && b.isDir) return 1;
+
+      switch (_currentSort) {
+        case FileSortType.nameAsc:
+          return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+        case FileSortType.nameDesc:
+          return b.name.toLowerCase().compareTo(a.name.toLowerCase());
+        case FileSortType.sizeAsc:
+          return a.size.compareTo(b.size);
+        case FileSortType.sizeDesc:
+          return b.size.compareTo(a.size);
+        case FileSortType.type:
+          final extA = p.extension(a.name).toLowerCase();
+          final extB = p.extension(b.name).toLowerCase();
+          final comp = extA.compareTo(extB);
+          return comp != 0 ? comp : a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      }
+    });
+  }
+
   Future<void> _updateCachedFiles() async {
     try {
       final appDir = await getApplicationDocumentsDirectory();
@@ -77,7 +150,6 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     }
   }
 
-  // 2. 加载 NAS 目录列表并比对本地缓存
   Future<void> _loadDirectory(String targetPath) async {
     setState(() {
       _isLoading = true;
@@ -100,18 +172,11 @@ class FileBrowserPageState extends State<FileBrowserPage> {
           rawList = res.data;
         }
 
-        final items = rawList.map((e) => NasFileItem.fromJson(e)).toList();
-
-        // 排序：文件夹在前，按字母排序
-        items.sort((a, b) {
-          if (a.isDir && !b.isDir) return -1;
-          if (!a.isDir && b.isDir) return 1;
-          return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-        });
+        _items = rawList.map((e) => NasFileItem.fromJson(e)).toList();
+        _applySort();
 
         if (mounted) {
           setState(() {
-            _items = items;
             _currentPath = targetPath;
             _isLoading = false;
           });
@@ -130,7 +195,6 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     }
   }
 
-  // 3. 处理文件点击：已缓存则秒开，未缓存则居中展示加载弹窗并下载
   Future<void> _handleItemTap(NasFileItem item) async {
     if (item.isDir) {
       _loadDirectory(item.path);
@@ -149,13 +213,11 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     final localFilePath = p.join(appDir.path, 'books', item.name);
     final targetFile = File(localFilePath);
 
-    // 情况 A：已经存在本地缓存，直接打开
     if (targetFile.existsSync() && targetFile.lengthSync() > 0) {
       _openReader(targetFile, item);
       return;
     }
 
-    // 情况 B：未缓存，弹出居中加载动画并执行下载
     final ValueNotifier<double> downloadProgress = ValueNotifier<double>(0.0);
     final CancelToken cancelToken = CancelToken();
 
@@ -240,17 +302,14 @@ class FileBrowserPageState extends State<FileBrowserPage> {
         },
       );
 
-      // 下载完成，关闭弹窗
       if (mounted && Navigator.canPop(context)) {
         Navigator.pop(context);
       }
 
-      // 更新已缓存列表
       setState(() {
         _cachedFileNames.add(item.name);
       });
 
-      // 自动打开阅读器
       if (mounted) {
         _openReader(targetFile, item);
       }
@@ -266,7 +325,6 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     }
   }
 
-  // 4. 打开阅读器并注入进度同步
   Future<void> _openReader(File file, NasFileItem item) async {
     final progressList = await ProgressSyncService.getAllLocalProgress();
     final savedRecord = progressList.firstWhere(
@@ -366,6 +424,35 @@ class FileBrowserPageState extends State<FileBrowserPage> {
                 )
               : null,
           actions: [
+            // 排序菜单按钮
+            PopupMenuButton<FileSortType>(
+              icon: const Icon(Icons.sort),
+              tooltip: '排序方式',
+              onSelected: _changeSort,
+              itemBuilder: (context) => FileSortType.values.map((type) {
+                final isSelected = type == _currentSort;
+                return PopupMenuItem<FileSortType>(
+                  value: type,
+                  child: Row(
+                    children: [
+                      Icon(
+                        isSelected ? Icons.check : Icons.radio_button_unchecked,
+                        size: 18,
+                        color: isSelected ? Theme.of(context).primaryColor : Colors.grey,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        type.label,
+                        style: TextStyle(
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                          color: isSelected ? Theme.of(context).primaryColor : null,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
             IconButton(
               icon: const Icon(Icons.refresh),
               tooltip: '刷新当前目录',
@@ -448,7 +535,6 @@ class FileBrowserPageState extends State<FileBrowserPage> {
                     style: const TextStyle(fontWeight: FontWeight.w500),
                   ),
                 ),
-                // 绿色的「已缓存」标签
                 if (isCached)
                   Container(
                     margin: const EdgeInsets.only(left: 8),

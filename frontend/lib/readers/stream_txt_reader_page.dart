@@ -3,8 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../core/chunked_txt_engine.dart';
-import '../core/txt_toc_extractor.dart';
+import '../core/full_txt_engine.dart';
 import '../core/reader_theme.dart';
 import '../core/page_turn_mode.dart';
 import '../core/page_turn_view.dart';
@@ -41,22 +40,17 @@ class StreamTxtReaderPage extends StatefulWidget {
 }
 
 class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
-  late ChunkedTxtEngine _engine;
-  bool _isIndexing = true;
+  bool _isLoading = true;
   String? _errorMessage;
   bool _showControls = false;
 
-  final Map<int, List<TxtPageSlice>> _chunkPagesCache = {};
-  int _currentChunkIndex = 0;
-  int _currentPageInChunk = 0;
-  int _currentSavedOffset = 0;
+  List<FullTxtPageSlice> _pages = [];
+  List<FullTxtChapterItem> _toc = [];
+  int _totalFileSize = 1;
 
-  // 关键防死循环与控制标志
-  bool _isJumping = false;
-  int _lastReportedOffset = -1;
-
-  List<TxtChapterItem> _toc = [];
+  int _currentPageIndex = 0;
   int _currentChapterIndex = 0;
+  int _lastReportedOffset = -1;
 
   ReaderThemeData _currentTheme = ReaderThemes.parchment;
   PageTurnMode _pageTurnMode = PageTurnMode.none;
@@ -75,11 +69,11 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   @override
   void initState() {
     super.initState();
-    _currentSavedOffset = widget.initialByteOffset;
-    _engine = ChunkedTxtEngine(widget.file);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadHandMode();
-    _initEngineAndScanToc();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _paginateEntireBook();
+    });
   }
 
   @override
@@ -107,99 +101,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     } catch (_) {}
   }
 
-  void _saveCurrentProgress() {
-    final currentPages = _chunkPagesCache[_currentChunkIndex] ?? [];
-    if (currentPages.isNotEmpty && _currentPageInChunk < currentPages.length) {
-      final slice = currentPages[_currentPageInChunk];
-      if (slice.startByteOffset == _lastReportedOffset) return;
-      _lastReportedOffset = slice.startByteOffset;
-
-      final totalSize = _engine.totalFileSize > 0 ? _engine.totalFileSize : 1;
-      final progress = (slice.endByteOffset / totalSize).clamp(0.0, 1.0);
-      widget.onProgressChanged?.call(slice.startByteOffset, progress);
-    }
-  }
-
-  Future<void> _initEngineAndScanToc() async {
-    try {
-      if (!widget.file.existsSync() || widget.file.lengthSync() == 0) {
-        setState(() {
-          _isIndexing = false;
-          _errorMessage = '文件不存在或内容为空';
-        });
-        return;
-      }
-
-      await _engine.buildIndex();
-
-      if (_engine.chunks.isEmpty) {
-        setState(() {
-          _isIndexing = false;
-          _errorMessage = 'TXT 文本分块失败';
-        });
-        return;
-      }
-
-      int targetChunk = 0;
-      for (int i = 0; i < _engine.chunks.length; i++) {
-        if (_currentSavedOffset >= _engine.chunks[i].startByte &&
-            _currentSavedOffset < _engine.chunks[i].endByte) {
-          targetChunk = i;
-          break;
-        }
-      }
-
-      _currentChunkIndex = targetChunk;
-
-      if (mounted) {
-        setState(() => _isIndexing = false);
-      }
-
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (!mounted) return;
-        
-        await _loadChunkPages(targetChunk, targetByteOffset: _currentSavedOffset, isCurrentDisplayChunk: true);
-
-        Future.delayed(const Duration(milliseconds: 250), () {
-          if (!mounted) return;
-          _preloadAdjacentChunks(targetChunk);
-
-          TxtTocExtractor.extractTocInIsolate(widget.file).then((tocList) {
-            if (mounted) {
-              setState(() {
-                _toc = tocList;
-                _updateCurrentChapter(_currentSavedOffset);
-              });
-            }
-          }).catchError((_) {});
-        });
-      });
-    } catch (e, stack) {
-      AppLogger.log('❌ TXT 初始化异常: $e\n$stack');
-      if (mounted) {
-        setState(() {
-          _isIndexing = false;
-          _errorMessage = '解析 TXT 异常: $e';
-        });
-      }
-    }
-  }
-
-  void _updateCurrentChapter(int byteOffset) {
-    if (_toc.isEmpty) return;
-    int activeIdx = 0;
-    for (int i = 0; i < _toc.length; i++) {
-      if (byteOffset >= _toc[i].startByteOffset) {
-        activeIdx = i;
-      } else {
-        break;
-      }
-    }
-    if (_currentChapterIndex != activeIdx) {
-      setState(() => _currentChapterIndex = activeIdx);
-    }
-  }
-
   Size _getContentSize() {
     final mq = MediaQuery.of(context);
     final availableWidth = mq.size.width - (kHorizontalPadding * 2);
@@ -218,188 +119,126 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     );
   }
 
-  Future<void> _loadChunkPages(
-    int chunkIdx, {
-    int? targetByteOffset,
-    bool isCurrentDisplayChunk = false,
-  }) async {
-    if (chunkIdx < 0 || chunkIdx >= _engine.chunks.length) return;
-
-    // 1. 命中缓存
-    if (_chunkPagesCache.containsKey(chunkIdx)) {
-      if (isCurrentDisplayChunk) {
-        final cachedPages = _chunkPagesCache[chunkIdx]!;
-        int targetPage = 0;
-        if (targetByteOffset != null && cachedPages.isNotEmpty) {
-          for (int p = 0; p < cachedPages.length; p++) {
-            final isLastPage = (p == cachedPages.length - 1);
-            if (targetByteOffset >= cachedPages[p].startByteOffset &&
-                (targetByteOffset < cachedPages[p].endByteOffset || isLastPage)) {
-              targetPage = p;
-              break;
-            }
-          }
-        }
-
-        setState(() {
-          _currentChunkIndex = chunkIdx;
-          _currentPageInChunk = targetPage;
-        });
-
-        _isJumping = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            _turnViewKey.currentState?.jumpToPage(targetPage);
-            Future.delayed(const Duration(milliseconds: 150), () {
-              if (mounted) _isJumping = false;
-            });
-            _saveCurrentProgress();
-          }
-        });
-      }
+  Future<void> _paginateEntireBook({int? targetByteOffset}) async {
+    if (!widget.file.existsSync() || widget.file.lengthSync() == 0) {
+      setState(() {
+        _isLoading = false;
+        _errorMessage = '文件不存在或内容为空';
+      });
       return;
     }
 
-    // 2. 缓存未命中，在 Isolate 中排版
+    setState(() => _isLoading = true);
+
     try {
       final contentSize = _getContentSize();
-      final pages = await ChunkedTxtEngine.paginateChunkInIsolate(
-        file: widget.file,
-        chunk: _engine.chunks[chunkIdx],
-        contentSize: contentSize,
-        fontSize: _typoConfig.fontSize,
-        lineHeight: _typoConfig.lineHeight,
-        letterSpacing: _typoConfig.letterSpacing,
-      );
+      final offsetToLocate = targetByteOffset ?? widget.initialByteOffset;
 
-      final processedPages = pages.map((slice) {
-        final processedContent = _typoConfig.indentFirstLine
-            ? TypographyConfig.applyIndent(slice.content)
-            : slice.content;
-        return TxtPageSlice(
-          globalPageIndex: slice.globalPageIndex,
-          startByteOffset: slice.startByteOffset,
-          endByteOffset: slice.endByteOffset,
-          content: processedContent,
-        );
-      }).toList();
+      final result = await FullTxtEngine.paginateInIsolate(
+        FullTxtPaginationParams(
+          filePath: widget.file.path,
+          contentSize: contentSize,
+          fontSize: _typoConfig.fontSize,
+          lineHeight: _typoConfig.lineHeight,
+          letterSpacing: _typoConfig.letterSpacing,
+          fontFamily: _typoConfig.customFontFamily,
+        ),
+      );
 
       if (!mounted) return;
 
-      _chunkPagesCache[chunkIdx] = processedPages;
-
-      if (isCurrentDisplayChunk) {
-        int targetPage = 0;
-        if (targetByteOffset != null && processedPages.isNotEmpty) {
-          for (int p = 0; p < processedPages.length; p++) {
-            final isLastPage = (p == processedPages.length - 1);
-            if (targetByteOffset >= processedPages[p].startByteOffset &&
-                (targetByteOffset < processedPages[p].endByteOffset || isLastPage)) {
-              targetPage = p;
-              break;
-            }
+      int targetPage = 0;
+      if (offsetToLocate > 0 && result.pages.isNotEmpty) {
+        for (int i = 0; i < result.pages.length; i++) {
+          final isLast = (i == result.pages.length - 1);
+          if (offsetToLocate >= result.pages[i].startByteOffset &&
+              (offsetToLocate < result.pages[i].endByteOffset || isLast)) {
+            targetPage = i;
+            break;
           }
         }
+      }
 
+      setState(() {
+        _pages = result.pages;
+        _toc = result.chapters;
+        _totalFileSize = result.totalBytes > 0 ? result.totalBytes : 1;
+        _currentPageIndex = targetPage;
+        _isLoading = false;
+        _errorMessage = null;
+      });
+
+      _updateCurrentChapterByPageIndex(targetPage);
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _turnViewKey.currentState?.jumpToPage(targetPage);
+        _saveCurrentProgress();
+      });
+    } catch (e, stack) {
+      AppLogger.log('❌ 全本排版异常: $e\n$stack');
+      if (mounted) {
         setState(() {
-          _currentChunkIndex = chunkIdx;
-          _currentPageInChunk = targetPage;
-        });
-
-        _isJumping = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            _turnViewKey.currentState?.jumpToPage(targetPage);
-            Future.delayed(const Duration(milliseconds: 150), () {
-              if (mounted) _isJumping = false;
-            });
-            _saveCurrentProgress();
-          }
+          _isLoading = false;
+          _errorMessage = '文本排版异常: $e';
         });
       }
-    } catch (e) {
-      AppLogger.log('❌ 分页切片异常 (chunk $chunkIdx): $e');
     }
   }
 
-  void _preloadAdjacentChunks(int currentIdx) {
-    if (currentIdx + 1 < _engine.chunks.length) {
-      _loadChunkPages(currentIdx + 1, isCurrentDisplayChunk: false);
-    }
-    if (currentIdx - 1 >= 0) {
-      _loadChunkPages(currentIdx - 1, isCurrentDisplayChunk: false);
-    }
-    _chunkPagesCache.removeWhere((idx, _) => (idx - currentIdx).abs() > 2);
+  void _saveCurrentProgress() {
+    if (_pages.isEmpty || _currentPageIndex >= _pages.length) return;
+    final slice = _pages[_currentPageIndex];
+    if (slice.startByteOffset == _lastReportedOffset) return;
+    _lastReportedOffset = slice.startByteOffset;
+
+    final progress = (slice.endByteOffset / _totalFileSize).clamp(0.0, 1.0);
+    widget.onProgressChanged?.call(slice.startByteOffset, progress);
   }
 
-  void _onPageChanged(int indexInCurrentChunk) {
-    if (_isJumping) return;
+  void _updateCurrentChapterByPageIndex(int pageIndex) {
+    if (_toc.isEmpty) return;
+    int activeIdx = 0;
+    for (int i = 0; i < _toc.length; i++) {
+      if (pageIndex >= _toc[i].pageIndex) {
+        activeIdx = i;
+      } else {
+        break;
+      }
+    }
+    if (_currentChapterIndex != activeIdx) {
+      setState(() => _currentChapterIndex = activeIdx);
+    }
+  }
 
-    final currentPages = _chunkPagesCache[_currentChunkIndex] ?? [];
-    if (currentPages.isEmpty || indexInCurrentChunk >= currentPages.length) return;
-
-    _currentPageInChunk = indexInCurrentChunk;
-
-    final currentSlice = currentPages[indexInCurrentChunk];
-    _currentSavedOffset = currentSlice.startByteOffset;
-    _updateCurrentChapter(currentSlice.startByteOffset);
-
+  void _onPageChanged(int pageIndex) {
+    if (pageIndex < 0 || pageIndex >= _pages.length) return;
+    _currentPageIndex = pageIndex;
+    _updateCurrentChapterByPageIndex(pageIndex);
     _saveCurrentProgress();
-    _preloadAdjacentChunks(_currentChunkIndex);
   }
 
   void _prevPage() {
-    if (_currentPageInChunk > 0) {
-      _turnViewKey.currentState?.jumpToPage(_currentPageInChunk - 1);
-    } else if (_currentChunkIndex > 0) {
-      final prevChunkIdx = _currentChunkIndex - 1;
-      _loadChunkPages(prevChunkIdx, isCurrentDisplayChunk: true).then((_) {
-        final pages = _chunkPagesCache[prevChunkIdx] ?? [];
-        if (pages.isNotEmpty) {
-          _turnViewKey.currentState?.jumpToPage(pages.length - 1);
-        }
-      });
+    if (_currentPageIndex > 0) {
+      _turnViewKey.currentState?.jumpToPage(_currentPageIndex - 1);
     }
   }
 
   void _nextPage() {
-    final currentPages = _chunkPagesCache[_currentChunkIndex] ?? [];
-    if (_currentPageInChunk < currentPages.length - 1) {
-      _turnViewKey.currentState?.jumpToPage(_currentPageInChunk + 1);
-    } else if (_currentChunkIndex < _engine.chunks.length - 1) {
-      _loadChunkPages(_currentChunkIndex + 1, isCurrentDisplayChunk: true).then((_) {
-        _turnViewKey.currentState?.jumpToPage(0);
-      });
+    if (_currentPageIndex < _pages.length - 1) {
+      _turnViewKey.currentState?.jumpToPage(_currentPageIndex + 1);
     }
   }
 
-  Future<void> _jumpToChapter(TxtChapterItem chapter) async {
+  void _jumpToChapter(FullTxtChapterItem chapter) {
     Navigator.pop(context);
-
-    if (_engine.chunks.isEmpty) return;
-
-    int targetChunk = 0;
-    for (int i = 0; i < _engine.chunks.length; i++) {
-      if (chapter.startByteOffset >= _engine.chunks[i].startByte &&
-          chapter.startByteOffset < _engine.chunks[i].endByte) {
-        targetChunk = i;
-        break;
-      }
-    }
+    if (chapter.pageIndex < 0 || chapter.pageIndex >= _pages.length) return;
 
     setState(() {
-      _currentChapterIndex = chapter.index;
-      _currentSavedOffset = chapter.startByteOffset;
+      _currentPageIndex = chapter.pageIndex;
       _showControls = false;
     });
-
-    await _loadChunkPages(
-      targetChunk,
-      targetByteOffset: chapter.startByteOffset,
-      isCurrentDisplayChunk: true,
-    );
-
-    _preloadAdjacentChunks(targetChunk);
+    _turnViewKey.currentState?.jumpToPage(chapter.pageIndex);
+    _saveCurrentProgress();
   }
 
   void _openTypographySettings() {
@@ -407,22 +246,14 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       context,
       config: _typoConfig,
       onConfigChanged: (newConfig) {
-        setState(() {
-          _typoConfig = newConfig;
-          _chunkPagesCache.clear();
-        });
-        _loadChunkPages(
-          _currentChunkIndex,
-          targetByteOffset: _currentSavedOffset,
-          isCurrentDisplayChunk: true,
-        ).then((_) {
-          _preloadAdjacentChunks(_currentChunkIndex);
-        });
+        final currentOffset = _pages.isNotEmpty ? _pages[_currentPageIndex].startByteOffset : 0;
+        setState(() => _typoConfig = newConfig);
+        _paginateEntireBook(targetByteOffset: currentOffset);
       },
     );
   }
 
-  /// 核心实现：3x3 九宫格热区触控引擎
+  /// 3x3 九宫格热区触控引擎
   Widget _buildNineGridGestureLayer() {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -432,7 +263,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         return GestureDetector(
           behavior: HitTestBehavior.translucent,
           onTapUp: (details) {
-            // 控制栏显示时，轻触屏幕任意区域仅收起控制栏
             if (_showControls) {
               setState(() => _showControls = false);
               return;
@@ -441,28 +271,22 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
             final dx = details.localPosition.dx;
             final dy = details.localPosition.dy;
 
-            // 计算所在的行和列 (0, 1, 2)
             final col = (dx / (totalWidth / 3)).clamp(0.0, 2.0).toInt();
             final row = (dy / (totalHeight / 3)).clamp(0.0, 2.0).toInt();
-
-            // 转化为 1 ~ 9 号区域
             final zone = row * 3 + col + 1;
 
-            // 区域 5：唤起控制菜单
             if (zone == 5) {
               setState(() => _showControls = true);
               return;
             }
 
             if (_handMode == HandMode.standard) {
-              // 常规手势：1、2、3、4 上一页；6、7、8、9 下一页
               if (zone >= 1 && zone <= 4) {
                 _prevPage();
               } else {
                 _nextPage();
               }
             } else {
-              // 单手模式：1、2 上一页；3、4、6、7、8、9 下一页
               if (zone == 1 || zone == 2) {
                 _prevPage();
               } else {
@@ -477,11 +301,18 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isIndexing) {
-      return const Scaffold(
-        backgroundColor: Color(0xFFF6EFE2),
-        body: Center(
-          child: CircularProgressIndicator(color: Color(0xFF382E25)),
+    if (_isLoading) {
+      return Scaffold(
+        backgroundColor: _currentTheme.bgColor,
+        body: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: Color(0xFF382E25)),
+              SizedBox(height: 16),
+              Text('正在排版全文...', style: TextStyle(color: Colors.black54, fontSize: 13)),
+            ],
+          ),
         ),
       );
     }
@@ -494,8 +325,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         ),
       );
     }
-
-    final currentPages = _chunkPagesCache[_currentChunkIndex] ?? [];
 
     return PopScope(
       canPop: true,
@@ -523,7 +352,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                         overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 8),
-                      Text('共 ${_toc.length} 章', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                      Text('共 ${_toc.length} 章 · 全书 ${_pages.length} 页', style: const TextStyle(color: Colors.white70, fontSize: 12)),
                     ],
                   ),
                 ),
@@ -549,7 +378,10 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                                 color: isCurrent ? Colors.brown : Colors.black87,
                               ),
                             ),
-                            trailing: isCurrent ? const Icon(Icons.bookmark, size: 16, color: Colors.brown) : null,
+                            trailing: Text(
+                              'P.${item.pageIndex + 1}',
+                              style: const TextStyle(fontSize: 11, color: Colors.grey),
+                            ),
                             onTap: () => _jumpToChapter(item),
                           );
                         },
@@ -560,31 +392,24 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         ),
         body: Stack(
           children: [
-            // 1. 底层排版渲染视图
-            currentPages.isEmpty
-                ? const Center(child: CircularProgressIndicator(color: Color(0xFF382E25)))
-                : PageTurnView(
-                    key: _turnViewKey,
-                    mode: _pageTurnMode,
-                    itemCount: currentPages.length,
-                    initialIndex: _currentPageInChunk,
-                    onPageChanged: _onPageChanged,
-                    pageBuilder: (context, index) {
-                      return _buildPageLayout(
-                        currentPages[index],
-                        index,
-                        currentPages.length,
-                      );
-                    },
-                  ),
+            // 1. 全局单层翻页视图
+            PageTurnView(
+              key: _turnViewKey,
+              mode: _pageTurnMode,
+              itemCount: _pages.length,
+              initialIndex: _currentPageIndex,
+              onPageChanged: _onPageChanged,
+              pageBuilder: (context, index) {
+                return _buildPageLayout(_pages[index], index, _pages.length);
+              },
+            ),
 
             // 2. 顶层 3x3 九宫格手势拦截层
-            if (currentPages.isNotEmpty)
-              Positioned.fill(
-                child: _buildNineGridGestureLayer(),
-              ),
+            Positioned.fill(
+              child: _buildNineGridGestureLayer(),
+            ),
 
-            // 3. 顶部控制条
+            // 3. 顶部导航栏
             if (_showControls)
               Positioned(
                 top: 0,
@@ -621,7 +446,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                 ),
               ),
 
-            // 4. 底部控制面板
+            // 4. 底部控制栏
             if (_showControls)
               Positioned(
                 bottom: 0,
@@ -635,16 +460,15 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // 进度滑条
+                        // 全书精确进度滑条
                         Slider(
-                          value: _currentChunkIndex.toDouble().clamp(0.0, (_engine.chunks.length - 1).toDouble()),
+                          value: _currentPageIndex.toDouble().clamp(0.0, (_pages.length - 1).toDouble()),
                           min: 0,
-                          max: (_engine.chunks.length > 1 ? _engine.chunks.length - 1 : 1).toDouble(),
+                          max: (_pages.length > 1 ? _pages.length - 1 : 1).toDouble(),
                           onChanged: (val) {
-                            final target = val.toInt();
-                            _loadChunkPages(target, isCurrentDisplayChunk: true).then((_) {
-                              _preloadAdjacentChunks(target);
-                            });
+                            final targetPage = val.toInt();
+                            setState(() => _currentPageIndex = targetPage);
+                            _turnViewKey.currentState?.jumpToPage(targetPage);
                           },
                         ),
                         Row(
@@ -654,13 +478,13 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                               child: Text(
                                 _toc.isNotEmpty && _currentChapterIndex < _toc.length
                                     ? _toc[_currentChapterIndex].title
-                                    : '分块 ${_currentChunkIndex + 1}/${_engine.chunks.length}',
+                                    : '页码 ${_currentPageIndex + 1}/${_pages.length}',
                                 style: const TextStyle(color: Colors.white70, fontSize: 12),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
                             Text(
-                              '${((_currentChunkIndex / (_engine.chunks.isNotEmpty ? _engine.chunks.length : 1)) * 100).toStringAsFixed(1)}%',
+                              '${((_currentPageIndex / (_pages.isNotEmpty ? _pages.length : 1)) * 100).toStringAsFixed(1)}%',
                               style: const TextStyle(color: Colors.white70, fontSize: 12),
                             ),
                           ],
@@ -686,10 +510,9 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                                     showCheckmark: false,
                                     side: BorderSide(
                                       color: isSelected ? const Color(0xFF8D7358) : Colors.transparent,
-                                      width: 1,
                                     ),
                                     labelStyle: TextStyle(
-                                      color: isSelected ? Colors.white : Colors.black87,
+                                      color: isSelected ? Colors.white : Colors.white70,
                                       fontSize: 11,
                                       fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                                     ),
@@ -702,7 +525,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                         ),
                         const SizedBox(height: 10),
 
-                        // 翻页模式选择
+                        // 翻页效果切换
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                           children: PageTurnMode.values.map((mode) {
@@ -716,7 +539,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                               showCheckmark: false,
                               side: BorderSide(
                                 color: isSelected ? const Color(0xFF8D7358) : Colors.transparent,
-                                width: 1,
                               ),
                               labelStyle: TextStyle(
                                 color: isSelected ? Colors.white : Colors.black87,
@@ -785,12 +607,14 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     );
   }
 
-  Widget _buildPageLayout(TxtPageSlice slice, int pageInChunk, int totalInChunk) {
+  Widget _buildPageLayout(FullTxtPageSlice slice, int pageIndex, int totalPages) {
     final currentChapterTitle = _toc.isNotEmpty && _currentChapterIndex < _toc.length
         ? _toc[_currentChapterIndex].title
         : widget.title;
 
-    final totalSize = _engine.totalFileSize > 0 ? _engine.totalFileSize : 1;
+    final content = _typoConfig.indentFirstLine
+        ? TypographyConfig.applyIndent(slice.content)
+        : slice.content;
 
     return SafeArea(
       child: Padding(
@@ -818,7 +642,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
               child: Align(
                 alignment: Alignment.topLeft,
                 child: Text(
-                  slice.content,
+                  content,
                   strutStyle: StrutStyle(
                     fontSize: _typoConfig.fontSize,
                     height: _typoConfig.lineHeight,
@@ -841,16 +665,14 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    _toc.isNotEmpty
-                        ? '第 ${_currentChapterIndex + 1}/${_toc.length} 章 · ${pageInChunk + 1}/$totalInChunk'
-                        : '页码 ${pageInChunk + 1}/$totalInChunk',
+                    '${pageIndex + 1} / $totalPages',
                     style: TextStyle(
                       fontSize: 11,
                       color: _currentTheme.textColor.withValues(alpha: 0.5),
                     ),
                   ),
                   Text(
-                    '${(slice.endByteOffset / totalSize * 100).toStringAsFixed(1)}%',
+                    '${(slice.endByteOffset / _totalFileSize * 100).toStringAsFixed(1)}%',
                     style: TextStyle(
                       fontSize: 11,
                       color: _currentTheme.textColor.withValues(alpha: 0.5),

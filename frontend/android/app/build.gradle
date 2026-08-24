@@ -1,12 +1,12 @@
 plugins {
     id "com.android.application"
-    id "kotlin-android"
-    // Flutter Gradle 插件
+    id "org.jetbrains.kotlin.android"
     id "dev.flutter.flutter-gradle-plugin"
 }
 
 def localProperties = new Properties()
 def localPropertiesFile = rootProject.file('local.properties')
+
 if (localPropertiesFile.exists()) {
     localPropertiesFile.withReader('UTF-8') { reader ->
         localProperties.load(reader)
@@ -24,14 +24,12 @@ if (flutterVersionName == null) {
 }
 
 android {
-    namespace "com.example.nas_reader" // 请根据你的实际包名调整
-    compileSdk flutter.compileSdkVersion
+    namespace "com.example.nas_reader"
 
-    // 适配最新插件要求的 NDK 版本
+    compileSdk flutter.compileSdkVersion
     ndkVersion = "28.2.13676358"
 
     compileOptions {
-        // 启用 Java 8/17 核心库脱糖 (sqflite、webview_flutter 等插件所需)
         coreLibraryDesugaringEnabled true
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
@@ -47,8 +45,7 @@ android {
 
     defaultConfig {
         applicationId "com.example.nas_reader"
-        // 核心配置：满足 webview_flutter, sqflite, path_provider 要求
-        minSdkVersion 21
+        minSdkVersion flutter.minSdkVersion
         targetSdkVersion flutter.targetSdkVersion
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
@@ -57,21 +54,23 @@ android {
 
     signingConfigs {
         release {
-            // 如果环境变量中有签名文件，则使用正式签名；否则回退到 debug 签名
             if (System.getenv("KEYSTORE_PATH") != null) {
                 storeFile file(System.getenv("KEYSTORE_PATH"))
                 storePassword System.getenv("KEYSTORE_PASSWORD")
                 keyAlias System.getenv("KEY_ALIAS")
                 keyPassword System.getenv("KEY_PASSWORD")
-            } else {
-                signingConfig signingConfigs.debug
             }
         }
     }
 
     buildTypes {
         release {
-            signingConfig signingConfigs.release
+            if (System.getenv("KEYSTORE_PATH") != null) {
+                signingConfig = signingConfigs.release
+            } else {
+                signingConfig = signingConfigs.debug
+            }
+
             minifyEnabled false
             shrinkResources false
         }
@@ -83,6 +82,5 @@ flutter {
 }
 
 dependencies {
-    // 支持低版本 Android 设备兼容 Java 8+ API
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
 }

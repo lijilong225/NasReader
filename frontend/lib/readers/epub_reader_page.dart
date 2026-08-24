@@ -58,6 +58,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   String? _errorMessage;
   bool _showControls = false;
   double _currentProgress = 0.0;
+  // ignore: unused_field
   String _currentCfi = '';
   List<EpubChapter> _toc = [];
 

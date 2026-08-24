@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"utils"
+	"reader-sync/utils"
 
 	"github.com/gin-gonic/gin"
 )

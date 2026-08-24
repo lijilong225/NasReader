@@ -5,7 +5,7 @@ import "time"
 
 type Bookmark struct {
 	ID              string    `gorm:"primaryKey;type:varchar(128)" json:"id"`
-	UserID          uint      `gorm:"index:idx_user_book;not null" json:"userId"` // 关联当前 JWT 用户
+	UserID          string    `gorm:"index:idx_user_book;type:varchar(64);not null" json:"userId"` // 👈 改为 string 匹配 Claims
 	BookID          string    `gorm:"index:idx_user_book;type:varchar(128);not null" json:"bookId"`
 	Title           string    `gorm:"type:text;not null" json:"title"`
 	Snippet         string    `gorm:"type:text" json:"snippet"`

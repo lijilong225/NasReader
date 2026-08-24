@@ -12,13 +12,12 @@ import (
 
 // SyncBookmarks 双向合并同步用户指定书籍的书签
 func SyncBookmarks(c *gin.Context) {
-	// 从中间件中提取鉴权后的当前用户ID
-	userIDVal, exists := c.Get("userID")
-	if !exists {
+	// 统一从上下文读取 string 类型的 user_id
+	userID := c.GetString("user_id")
+	if userID == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "未获取到用户身份"})
 		return
 	}
-	userID := userIDVal.(uint)
 
 	var req models.SyncBookmarkRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -41,7 +40,6 @@ func SyncBookmarks(c *gin.Context) {
 		}
 
 		for _, clientB := range req.Bookmarks {
-			// 绑定当前用户
 			clientB.UserID = userID
 			clientB.BookID = req.BookID
 
@@ -92,7 +90,12 @@ func SyncBookmarks(c *gin.Context) {
 
 // GetBookmarks 获取指定书籍的书签列表
 func GetBookmarks(c *gin.Context) {
-	userID := c.MustGet("userID").(uint)
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未获取到用户身份"})
+		return
+	}
+
 	bookID := c.Param("book_id")
 
 	var bookmarks []models.Bookmark

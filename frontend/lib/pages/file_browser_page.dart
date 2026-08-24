@@ -1,38 +1,33 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
-import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 
-import '../services/app_logger.dart';
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
+import '../services/progress_sync_service.dart';
+import '../services/app_logger.dart';
 
-enum SortField { name, modTime, size }
-enum SortOrder { ascending, descending }
-
-class FileItem {
+class NasFileItem {
   final String name;
   final String path;
   final bool isDir;
   final int size;
-  final int modTime; // 毫秒时间戳
 
-  FileItem({
+  NasFileItem({
     required this.name,
     required this.path,
     required this.isDir,
     required this.size,
-    required this.modTime,
   });
 
-  factory FileItem.fromJson(Map<String, dynamic> json) {
-    return FileItem(
-      name: json['name']?.toString() ?? '',
-      path: json['path']?.toString() ?? '',
-      isDir: json['is_dir'] == true || json['isDir'] == true,
+  factory NasFileItem.fromJson(Map<String, dynamic> json) {
+    return NasFileItem(
+      name: json['name'] ?? '',
+      path: json['path'] ?? '',
+      isDir: json['is_dir'] ?? false,
       size: (json['size'] as num?)?.toInt() ?? 0,
-      modTime: (json['mod_time'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -43,318 +38,347 @@ class FileBrowserPage extends StatefulWidget {
   const FileBrowserPage({super.key, required this.dio});
 
   @override
-  State<FileBrowserPage> createState() => _FileBrowserPageState();
+  State<FileBrowserPage> createState() => FileBrowserPageState();
 }
 
-class _FileBrowserPageState extends State<FileBrowserPage> {
+class FileBrowserPageState extends State<FileBrowserPage> {
   String _currentPath = '/';
-  List<FileItem> _items = [];
-  bool _isLoading = false;
+  List<NasFileItem> _items = [];
+  bool _isLoading = true;
   String? _errorMessage;
 
-  // 排序状态（默认按名称升序）
-  SortField _sortField = SortField.name;
-  SortOrder _sortOrder = SortOrder.ascending;
+  // 记录本地已缓存的文件名集合
+  final Set<String> _cachedFileNames = {};
 
   @override
   void initState() {
     super.initState();
-    _fetchDirectory(_currentPath);
+    _loadDirectory(_currentPath);
   }
 
-  void _showToast(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
-  }
+  // 1. 扫描本地 books 目录，更新已缓存集合
+  Future<void> _updateCachedFiles() async {
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final booksDir = Directory(p.join(appDir.path, 'books'));
+      if (!booksDir.existsSync()) {
+        booksDir.createSync(recursive: true);
+      }
 
-  // 对列表执行内存排序（文件夹优先置顶）
-  void _applySorting() {
-    setState(() {
-      _items.sort((a, b) {
-        // 1. 文件夹始终排在最前面
-        if (a.isDir && !b.isDir) return -1;
-        if (!a.isDir && b.isDir) return 1;
-
-        int compareResult = 0;
-        switch (_sortField) {
-          case SortField.name:
-            compareResult = a.name.toLowerCase().compareTo(b.name.toLowerCase());
-            break;
-          case SortField.modTime:
-            compareResult = a.modTime.compareTo(b.modTime);
-            break;
-          case SortField.size:
-            compareResult = a.size.compareTo(b.size);
-            break;
+      final files = booksDir.listSync();
+      _cachedFileNames.clear();
+      for (var f in files) {
+        if (f is File && f.lengthSync() > 0) {
+          _cachedFileNames.add(p.basename(f.path));
         }
-
-        return _sortOrder == SortOrder.ascending ? compareResult : -compareResult;
-      });
-    });
+      }
+    } catch (e) {
+      AppLogger.log('❌ 扫描本地已缓存文件失败: $e');
+    }
   }
 
-  Future<void> _fetchDirectory(String path) async {
+  // 2. 加载 NAS 目录列表并比对本地缓存
+  Future<void> _loadDirectory(String targetPath) async {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
 
     try {
-      final res = await widget.dio.get(
-        '/api/v1/files/browse',
-        queryParameters: {'path': path},
-      );
+      await _updateCachedFiles();
 
-      AppLogger.log('[FileBrowser] 响应: ${res.data}');
+      final res = await widget.dio.get(
+        '/api/v1/files/list',
+        queryParameters: {'path': targetPath},
+      );
 
       if (res.statusCode == 200 && res.data != null) {
         List<dynamic> rawList = [];
-        if (res.data is Map) {
-          if (res.data['items'] is List) {
-            rawList = res.data['items'];
-          } else if (res.data['data'] is List) {
-            rawList = res.data['data'];
-          }
+        if (res.data is Map && res.data['data'] is List) {
+          rawList = res.data['data'];
         } else if (res.data is List) {
           rawList = res.data;
         }
 
-        _items = rawList
-            .map((item) => FileItem.fromJson(Map<String, dynamic>.from(item)))
-            .toList();
+        final items = rawList.map((e) => NasFileItem.fromJson(e)).toList();
 
-        _currentPath = res.data is Map && res.data['current_path'] != null
-            ? res.data['current_path'].toString()
-            : path;
+        // 排序：文件夹在前，按字母排序
+        items.sort((a, b) {
+          if (a.isDir && !b.isDir) return -1;
+          if (!a.isDir && b.isDir) return 1;
+          return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+        });
 
-        _applySorting();
+        if (mounted) {
+          setState(() {
+            _items = items;
+            _currentPath = targetPath;
+            _isLoading = false;
+          });
+        }
       } else {
-        final err = res.data?['error'] ?? res.data?['msg'] ?? '获取目录失败';
-        _showToast(err);
-        setState(() => _errorMessage = err);
+        throw Exception('获取文件列表失败: ${res.statusCode}');
       }
-    } on DioException catch (e) {
-      final status = e.response?.statusCode;
-      final serverError = e.response?.data?['error'] ?? e.response?.data?['msg'];
-      final err = serverError ?? '网络请求失败 [$status]';
-      _showToast(err);
-      setState(() => _errorMessage = err);
-      AppLogger.log('❌ 获取目录失败: $err');
-    } catch (e, stack) {
-      final err = '数据解析异常: $e';
-      _showToast(err);
-      setState(() => _errorMessage = err);
-      AppLogger.log('❌ 目录解析崩溃: $e\n$stack');
-    } finally {
+    } catch (e) {
+      AppLogger.log('❌ 加载目录失败: $e');
       if (mounted) {
-        setState(() => _isLoading = false);
+        setState(() {
+          _isLoading = false;
+          _errorMessage = '加载失败: $e';
+        });
       }
     }
   }
 
-  // 弹出排序选择弹窗
-  void _showSortDialog() {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setModalState) => SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('文件排序方式', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    ChoiceChip(
-                      label: const Text('文件名'),
-                      selected: _sortField == SortField.name,
-                      onSelected: (selected) {
-                        if (selected) {
-                          setModalState(() => _sortField = SortField.name);
-                          _applySorting();
-                        }
-                      },
-                    ),
-                    ChoiceChip(
-                      label: const Text('修改时间'),
-                      selected: _sortField == SortField.modTime,
-                      onSelected: (selected) {
-                        if (selected) {
-                          setModalState(() => _sortField = SortField.modTime);
-                          _applySorting();
-                        }
-                      },
-                    ),
-                    ChoiceChip(
-                      label: const Text('文件大小'),
-                      selected: _sortField == SortField.size,
-                      onSelected: (selected) {
-                        if (selected) {
-                          setModalState(() => _sortField = SortField.size);
-                          _applySorting();
-                        }
-                      },
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                const Text('排列顺序', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.grey)),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        icon: const Icon(Icons.arrow_upward, size: 18),
-                        label: const Text('正序 (升序)'),
-                        style: OutlinedButton.styleFrom(
-                          backgroundColor: _sortOrder == SortOrder.ascending ? Theme.of(context).colorScheme.primaryContainer : null,
-                        ),
-                        onPressed: () {
-                          setModalState(() => _sortOrder = SortOrder.ascending);
-                          _applySorting();
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        icon: const Icon(Icons.arrow_downward, size: 18),
-                        label: const Text('倒序 (降序)'),
-                        style: OutlinedButton.styleFrom(
-                          backgroundColor: _sortOrder == SortOrder.descending ? Theme.of(context).colorScheme.primaryContainer : null,
-                        ),
-                        onPressed: () {
-                          setModalState(() => _sortOrder = SortOrder.descending);
-                          _applySorting();
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _downloadAndOpenBook(FileItem item) async {
-    final fileName = item.name;
-    final ext = p.extension(fileName).toLowerCase();
-
-    if (ext != '.txt' && ext != '.epub') {
-      _showToast('暂不支持该文件格式');
+  // 3. 处理文件点击：已缓存则秒开，未缓存则居中展示加载弹窗并下载
+  Future<void> _handleItemTap(NasFileItem item) async {
+    if (item.isDir) {
+      _loadDirectory(item.path);
       return;
     }
 
-    try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final localDir = Directory(p.join(appDir.path, 'books'));
-      if (!localDir.existsSync()) localDir.createSync(recursive: true);
+    final ext = p.extension(item.name).toLowerCase();
+    if (ext != '.txt' && ext != '.epub') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('暂不支持此格式阅读，目前支持 TXT / EPUB')),
+      );
+      return;
+    }
 
-      final savePath = p.join(localDir.path, fileName);
-      final targetFile = File(savePath);
+    final appDir = await getApplicationDocumentsDirectory();
+    final localFilePath = p.join(appDir.path, 'books', item.name);
+    final targetFile = File(localFilePath);
 
-      if (!targetFile.existsSync() || targetFile.lengthSync() == 0) {
-        _showToast('正在下载: $fileName ...');
-        final downloadPath = item.path.startsWith('/') ? item.path : '/${item.path}';
-        await widget.dio.download(
-          '/api/v1/files/download',
-          savePath,
-          queryParameters: {'path': downloadPath},
+    // 情况 A：已经存在本地缓存，直接打开
+    if (targetFile.existsSync() && targetFile.lengthSync() > 0) {
+      _openReader(targetFile, item);
+      return;
+    }
+
+    // 情况 B：未缓存，弹出居中加载动画并执行下载
+    final ValueNotifier<double> downloadProgress = ValueNotifier<double>(0.0);
+    final CancelToken cancelToken = CancelToken();
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return PopScope(
+          canPop: false,
+          onPopInvokedWithResult: (didPop, result) {
+            cancelToken.cancel('用户取消下载');
+          },
+          child: Dialog(
+            backgroundColor: Theme.of(context).cardColor,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 48,
+                    height: 48,
+                    child: CircularProgressIndicator(strokeWidth: 3.5),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    '正在下载《${p.basenameWithoutExtension(item.name)}》',
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                  ),
+                  const SizedBox(height: 12),
+                  ValueListenableBuilder<double>(
+                    valueListenable: downloadProgress,
+                    builder: (context, progress, _) {
+                      return Column(
+                        children: [
+                          LinearProgressIndicator(
+                            value: progress > 0 ? progress : null,
+                            minHeight: 6,
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            progress > 0
+                                ? '${(progress * 100).toStringAsFixed(1)}%'
+                                : '正在从 NAS 建立传输连接...',
+                            style: const TextStyle(fontSize: 12, color: Colors.grey),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  TextButton(
+                    onPressed: () {
+                      cancelToken.cancel('用户取消');
+                      Navigator.pop(ctx);
+                    },
+                    child: const Text('取消下载'),
+                  ),
+                ],
+              ),
+            ),
+          ),
         );
+      },
+    );
+
+    try {
+      await widget.dio.download(
+        '/api/v1/files/download',
+        localFilePath,
+        queryParameters: {'path': item.path},
+        cancelToken: cancelToken,
+        onReceiveProgress: (received, total) {
+          if (total > 0) {
+            downloadProgress.value = (received / total).clamp(0.0, 1.0);
+          }
+        },
+      );
+
+      // 下载完成，关闭弹窗
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
       }
 
-      if (!mounted) return;
+      // 更新已缓存列表
+      setState(() {
+        _cachedFileNames.add(item.name);
+      });
 
-      if (ext == '.txt') {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => StreamTxtReaderPage(
-              bookId: fileName,
-              file: targetFile,
-              title: p.basenameWithoutExtension(fileName),
-            ),
-          ),
-        );
-      } else if (ext == '.epub') {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => EpubReaderPage(
-              bookId: fileName,
-              file: targetFile,
-              title: p.basenameWithoutExtension(fileName),
-            ),
-          ),
-        );
+      // 自动打开阅读器
+      if (mounted) {
+        _openReader(targetFile, item);
       }
     } catch (e) {
-      _showToast('打开书籍失败: $e');
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+      if (!CancelToken.isCancel(e as DioException)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('下载失败: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
-  bool _canGoBack() => _currentPath != '/' && _currentPath.isNotEmpty;
+  // 4. 打开阅读器并注入进度同步
+  Future<void> _openReader(File file, NasFileItem item) async {
+    final progressList = await ProgressSyncService.getAllLocalProgress();
+    final savedRecord = progressList.firstWhere(
+      (p) => p.bookId == item.name,
+      orElse: () => BookProgress(
+        bookId: item.name,
+        title: p.basenameWithoutExtension(item.name),
+        filePath: item.path,
+        progressPercent: 0.0,
+        lastReadTime: 0,
+      ),
+    );
 
-  void _goBack() {
-    if (!_canGoBack()) return;
-    final parent = p.dirname(_currentPath);
-    _fetchDirectory(parent == '.' ? '/' : parent);
+    final ext = p.extension(item.name).toLowerCase();
+    if (!mounted) return;
+
+    if (ext == '.txt') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => StreamTxtReaderPage(
+            bookId: item.name,
+            file: file,
+            title: p.basenameWithoutExtension(item.name),
+            initialByteOffset: savedRecord.txtByteOffset ?? 0,
+            onProgressChanged: (byteOffset, progress) {
+              ProgressSyncService.updateProgress(
+                dio: widget.dio,
+                bookId: item.name,
+                title: p.basenameWithoutExtension(item.name),
+                filePath: item.path,
+                progressPercent: progress,
+                txtByteOffset: byteOffset,
+              );
+            },
+          ),
+        ),
+      ).then((_) => _updateCachedFiles());
+    } else if (ext == '.epub') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => EpubReaderPage(
+            bookId: item.name,
+            file: file,
+            title: p.basenameWithoutExtension(item.name),
+            initialCfi: savedRecord.epubCfi,
+            onProgressChanged: (cfi, progress) {
+              ProgressSyncService.updateProgress(
+                dio: widget.dio,
+                bookId: item.name,
+                title: p.basenameWithoutExtension(item.name),
+                filePath: item.path,
+                progressPercent: progress,
+                epubCfi: cfi,
+              );
+            },
+          ),
+        ),
+      ).then((_) => _updateCachedFiles());
+    }
   }
 
-  String _formatDate(int timestamp) {
-    if (timestamp <= 0) return '';
-    final dt = DateTime.fromMillisecondsSinceEpoch(timestamp);
-    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+  String _formatSize(int bytes) {
+    if (bytes <= 0) return '';
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';
   }
 
   @override
   Widget build(BuildContext context) {
+    final isRoot = _currentPath == '/' || _currentPath.isEmpty;
+
     return PopScope(
-      canPop: !_canGoBack(),
+      canPop: isRoot,
       onPopInvokedWithResult: (didPop, result) {
-        if (didPop) return;
-        _goBack();
+        if (!didPop && !isRoot) {
+          final parent = p.dirname(_currentPath);
+          _loadDirectory(parent.isEmpty ? '/' : parent);
+        }
       },
       child: Scaffold(
         appBar: AppBar(
           title: Text(
-            _currentPath == '/' ? 'NAS 书库根目录' : p.basename(_currentPath),
+            isRoot ? 'NAS 书库' : p.basename(_currentPath),
+            maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
-          leading: _canGoBack()
-              ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: _goBack)
+          leading: !isRoot
+              ? IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () {
+                    final parent = p.dirname(_currentPath);
+                    _loadDirectory(parent.isEmpty ? '/' : parent);
+                  },
+                )
               : null,
           actions: [
             IconButton(
-              icon: const Icon(Icons.sort),
-              tooltip: '排序',
-              onPressed: _showSortDialog,
-            ),
-            IconButton(
               icon: const Icon(Icons.refresh),
-              tooltip: '刷新',
-              onPressed: () => _fetchDirectory(_currentPath),
+              tooltip: '刷新当前目录',
+              onPressed: () => _loadDirectory(_currentPath),
             ),
           ],
         ),
-        body: SafeArea(child: _buildBody()),
+        body: _buildContent(),
       ),
     );
   }
 
-  Widget _buildBody() {
+  Widget _buildContent() {
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -366,14 +390,14 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.error_outline, size: 56, color: Colors.redAccent),
+              const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
+              const SizedBox(height: 12),
+              Text(_errorMessage!, textAlign: TextAlign.center),
               const SizedBox(height: 16),
-              Text(_errorMessage!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14)),
-              const SizedBox(height: 20),
               ElevatedButton.icon(
                 icon: const Icon(Icons.refresh),
                 label: const Text('重试'),
-                onPressed: () => _fetchDirectory(_currentPath),
+                onPressed: () => _loadDirectory(_currentPath),
               ),
             ],
           ),
@@ -382,57 +406,86 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
     }
 
     if (_items.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.folder_open, size: 64, color: Colors.grey),
-            const SizedBox(height: 16),
-            Text(
-              '当前目录为空或未包含 .txt / .epub 书籍\n(路径: $_currentPath)',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.grey, height: 1.5),
-            ),
-          ],
-        ),
+      return const Center(
+        child: Text('当前目录为空', style: TextStyle(color: Colors.grey)),
       );
     }
 
-    return ListView.separated(
-      physics: const AlwaysScrollableScrollPhysics(),
-      itemCount: _items.length,
-      separatorBuilder: (_, __) => const Divider(height: 1),
-      itemBuilder: (context, index) {
-        final item = _items[index];
-        final ext = p.extension(item.name).toLowerCase();
-        final dateStr = _formatDate(item.modTime);
-        final sizeStr = '${(item.size / 1024).toStringAsFixed(1)} KB';
+    return RefreshIndicator(
+      onRefresh: () => _loadDirectory(_currentPath),
+      child: ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        itemCount: _items.length,
+        separatorBuilder: (_, __) => const Divider(height: 1),
+        itemBuilder: (context, index) {
+          final item = _items[index];
+          final ext = p.extension(item.name).toLowerCase();
+          final isCached = !item.isDir && _cachedFileNames.contains(item.name);
 
-        return ListTile(
-          leading: Icon(
-            item.isDir
-                ? Icons.folder
-                : (ext == '.txt'
-                    ? Icons.description
-                    : (ext == '.epub' ? Icons.menu_book : Icons.insert_drive_file)),
-            color: item.isDir
-                ? Colors.amber.shade700
-                : (ext == '.epub' ? Colors.green : Colors.blue),
-          ),
-          title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-          subtitle: item.isDir
-              ? (dateStr.isNotEmpty ? Text(dateStr, style: const TextStyle(fontSize: 12, color: Colors.grey)) : null)
-              : Text('$sizeStr ${dateStr.isNotEmpty ? "· $dateStr" : ""}', style: const TextStyle(fontSize: 12, color: Colors.grey)),
-          onTap: () {
-            if (item.isDir) {
-              final nextPath = _currentPath == '/' ? '/${item.name}' : '$_currentPath/${item.name}';
-              _fetchDirectory(nextPath);
-            } else {
-              _downloadAndOpenBook(item);
-            }
-          },
-        );
-      },
+          IconData iconData = Icons.insert_drive_file_outlined;
+          Color iconColor = Colors.grey;
+
+          if (item.isDir) {
+            iconData = Icons.folder;
+            iconColor = Colors.amber.shade700;
+          } else if (ext == '.epub') {
+            iconData = Icons.menu_book;
+            iconColor = Colors.green;
+          } else if (ext == '.txt') {
+            iconData = Icons.description;
+            iconColor = Colors.blue;
+          }
+
+          return ListTile(
+            leading: Icon(iconData, color: iconColor, size: 28),
+            title: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    item.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                ),
+                // 绿色的「已缓存」标签
+                if (isCached)
+                  Container(
+                    margin: const EdgeInsets.only(left: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withValues(alpha: 0.15),
+                      border: Border.all(color: Colors.green, width: 0.8),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      '已缓存',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.green,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            subtitle: item.isDir
+                ? const Text('文件夹', style: TextStyle(fontSize: 12, color: Colors.grey))
+                : Text(
+                    _formatSize(item.size),
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+            trailing: Icon(
+              item.isDir
+                  ? Icons.chevron_right
+                  : (isCached ? Icons.check_circle_outline : Icons.cloud_download_outlined),
+              size: 20,
+              color: isCached ? Colors.green : Colors.grey,
+            ),
+            onTap: () => _handleItemTap(item),
+          );
+        },
+      ),
     );
   }
 }

@@ -120,7 +120,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
         AndroidWebViewController.enableDebugging(true);
       }
 
-      // 3. 构建并直接加载含有 Base64 数据的 HTML
+      // 3. 构建并加载带有增强型手势和跳转脚本的 HTML
       final html = _buildEpubViewerHtml(base64Epub, widget.initialCfi);
       await _webViewController.loadHtmlString(html, baseUrl: 'https://localhost/');
     } catch (e) {
@@ -264,54 +264,79 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
         const iframeDoc = iframeView.document;
         if (!iframeDoc) return;
 
+        iframeDoc.addEventListener("click", function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+        }, true);
+
         let startX = 0;
         let startY = 0;
-        let isMoving = false;
+        let isMoved = false;
 
         iframeDoc.addEventListener("touchstart", function(e) {
           if (e.touches.length === 1) {
             startX = e.touches[0].clientX;
             startY = e.touches[0].clientY;
-            isMoving = false;
+            isMoved = false;
           }
-        }, { passive: true });
+        }, { passive: false });
 
         iframeDoc.addEventListener("touchmove", function(e) {
           if (e.touches.length === 1) {
             const dx = Math.abs(e.touches[0].clientX - startX);
             const dy = Math.abs(e.touches[0].clientY - startY);
-            if (dx > 10 || dy > 10) {
-              isMoving = true;
+            if (dx > 12 || dy > 12) {
+              isMoved = true;
             }
           }
         }, { passive: true });
 
         iframeDoc.addEventListener("touchend", function(e) {
-          // 如果用户是在滑动/拖拽选择，则不触发点击动作
-          if (isMoving) return;
+          if (isMoved) return;
 
-          const width = window.innerWidth || iframeDoc.documentElement.clientWidth;
+          e.preventDefault();
+          e.stopPropagation();
+
+          const screenWidth = window.innerWidth || iframeDoc.documentElement.clientWidth || document.body.clientWidth;
           const clickX = startX;
 
-          // 左侧 30% 翻上一页
-          if (clickX < width * 0.3) {
+          if (clickX < screenWidth * 0.3) {
             rendition.prev();
-          }
-          // 右侧 30% 翻下一页
-          else if (clickX > width * 0.7) {
+          } else if (clickX > screenWidth * 0.7) {
             rendition.next();
-          }
-          // 中间 40% 呼出/隐藏顶部与底部控制栏
-          else {
+          } else {
             FlutterChannel.postMessage(JSON.stringify({ type: 'onTapCenter' }));
           }
-        }, { passive: true });
+        }, { passive: false });
       });
 
       window.nextPage = () => rendition.next();
       window.prevPage = () => rendition.prev();
       window.goToCfi = (cfi) => rendition.display(cfi);
-      window.goToHref = (href) => rendition.display(href);
+      
+      // 增强型目录跳转：支持 href、相对路径、Spine 检索与锚点容错
+      window.goToHref = function(href) {
+        if (!href) return;
+        const targetHref = href.trim();
+
+        rendition.display(targetHref).catch(err => {
+          try {
+            const item = book.spine.get(targetHref);
+            if (item) {
+              rendition.display(item.href || item.idref);
+            } else {
+              const cleanHref = targetHref.split('#')[0];
+              rendition.display(cleanHref);
+            }
+          } catch (e) {
+            FlutterChannel.postMessage(JSON.stringify({
+              type: 'onError',
+              message: '目录跳转失败: ' + err
+            }));
+          }
+        });
+      };
+
       window.setTheme = (bgColor, textColor) => {
         document.body.style.background = bgColor;
         rendition.themes.default({
@@ -335,8 +360,19 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   void _prevPage() => _webViewController.runJavaScript('window.prevPage();');
 
   void _jumpToHref(String href) {
-    _webViewController.runJavaScript('window.goToHref("$href");');
-    Navigator.pop(context);
+    if (href.trim().isEmpty) return;
+
+    if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
+      Navigator.of(context).pop();
+    }
+
+    final safeHref = href
+        .trim()
+        .replaceAll(r'\', r'\\')
+        .replaceAll("'", r"\'")
+        .replaceAll('"', r'\"');
+
+    _webViewController.runJavaScript("window.goToHref('$safeHref');");
   }
 
   void _applyTheme(Color bg, Color text) {
@@ -562,16 +598,35 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   }
 
   Widget _buildTocItem(EpubChapter chapter, [int depth = 0]) {
-    if (chapter.subitems.isEmpty) {
+    final hasChildren = chapter.subitems.isNotEmpty;
+
+    if (!hasChildren) {
       return ListTile(
         contentPadding: EdgeInsets.only(left: 16.0 + (depth * 16.0), right: 16.0),
-        title: Text(chapter.label, style: const TextStyle(fontSize: 13)),
+        title: Text(
+          chapter.label.isNotEmpty ? chapter.label : '未命名章节',
+          style: const TextStyle(fontSize: 13),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
         onTap: () => _jumpToHref(chapter.href),
       );
     }
+
     return ExpansionTile(
       tilePadding: EdgeInsets.only(left: 16.0 + (depth * 16.0), right: 16.0),
-      title: Text(chapter.label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+      title: InkWell(
+        onTap: () => _jumpToHref(chapter.href),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Text(
+            chapter.label.isNotEmpty ? chapter.label : '未命名章节',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ),
       children: chapter.subitems.map((sub) => _buildTocItem(sub, depth + 1)).toList(),
     );
   }

@@ -164,6 +164,8 @@ class FileBrowserPageState extends State<FileBrowserPage> {
         queryParameters: {'path': targetPath},
       );
 
+      AppLogger.log('📂 加载目录 $targetPath 成功，文件数: ${res.data['data']?.length ?? 0}');
+
       if (res.statusCode == 200 && res.data != null) {
         List<dynamic> rawList = [];
         if (res.data is Map && res.data['data'] is List) {

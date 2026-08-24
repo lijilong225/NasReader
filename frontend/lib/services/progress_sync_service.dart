@@ -243,7 +243,6 @@ class ProgressSyncService {
           '/api/v1/sync/delete',
           data: {
             'book_id': bookId,
-            'user_id': ApiConfig.currentUser?.id.toString(),
           },
         );
         AppLogger.log('🗑️ 远端同步数据已清除: $bookId (HTTP ${res.statusCode})');

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/chunked_txt_engine.dart';
 import '../core/txt_toc_extractor.dart';
@@ -10,6 +11,14 @@ import '../core/page_turn_view.dart';
 import '../widgets/typography_config.dart';
 import '../widgets/typography_settings_modal.dart';
 import '../services/app_logger.dart';
+
+enum HandMode {
+  standard('常规手势'),
+  oneHand('单手模式');
+
+  final String label;
+  const HandMode(this.label);
+}
 
 class StreamTxtReaderPage extends StatefulWidget {
   final File file;
@@ -42,7 +51,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   int _currentPageInChunk = 0;
   int _currentSavedOffset = 0;
 
-  // 关键防死循环控制标志
+  // 关键防死循环与控制标志
   bool _isJumping = false;
   int _lastReportedOffset = -1;
 
@@ -51,6 +60,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
   ReaderThemeData _currentTheme = ReaderThemes.parchment;
   PageTurnMode _pageTurnMode = PageTurnMode.none;
+  HandMode _handMode = HandMode.standard;
   TypographyConfig _typoConfig = const TypographyConfig();
 
   final GlobalKey<PageTurnViewState> _turnViewKey = GlobalKey<PageTurnViewState>();
@@ -68,6 +78,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     _currentSavedOffset = widget.initialByteOffset;
     _engine = ChunkedTxtEngine(widget.file);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    _loadHandMode();
     _initEngineAndScanToc();
   }
 
@@ -76,6 +87,24 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     _saveCurrentProgress();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
+  }
+
+  Future<void> _loadHandMode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedMode = prefs.getString('txt_hand_mode');
+      if (savedMode == HandMode.oneHand.name && mounted) {
+        setState(() => _handMode = HandMode.oneHand);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveHandMode(HandMode mode) async {
+    setState(() => _handMode = mode);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('txt_hand_mode', mode.name);
+    } catch (_) {}
   }
 
   void _saveCurrentProgress() {
@@ -189,7 +218,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     );
   }
 
-  // 核心修复：区分是否为“当前显示分块”，严禁预加载时污染 _currentChunkIndex
   Future<void> _loadChunkPages(
     int chunkIdx, {
     int? targetByteOffset,
@@ -260,7 +288,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
       _chunkPagesCache[chunkIdx] = processedPages;
 
-      // 仅当加载的是当前展示块时，才刷新 UI 与执行跳页
       if (isCurrentDisplayChunk) {
         int targetPage = 0;
         if (targetByteOffset != null && processedPages.isNotEmpty) {
@@ -302,12 +329,10 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     if (currentIdx - 1 >= 0) {
       _loadChunkPages(currentIdx - 1, isCurrentDisplayChunk: false);
     }
-    // 释放过远缓存
     _chunkPagesCache.removeWhere((idx, _) => (idx - currentIdx).abs() > 2);
   }
 
   void _onPageChanged(int indexInCurrentChunk) {
-    // 处于代码控制的主动跳转过程中，直接忽略翻页回调
     if (_isJumping) return;
 
     final currentPages = _chunkPagesCache[_currentChunkIndex] ?? [];
@@ -321,6 +346,31 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
     _saveCurrentProgress();
     _preloadAdjacentChunks(_currentChunkIndex);
+  }
+
+  void _prevPage() {
+    if (_currentPageInChunk > 0) {
+      _turnViewKey.currentState?.jumpToPage(_currentPageInChunk - 1);
+    } else if (_currentChunkIndex > 0) {
+      final prevChunkIdx = _currentChunkIndex - 1;
+      _loadChunkPages(prevChunkIdx, isCurrentDisplayChunk: true).then((_) {
+        final pages = _chunkPagesCache[prevChunkIdx] ?? [];
+        if (pages.isNotEmpty) {
+          _turnViewKey.currentState?.jumpToPage(pages.length - 1);
+        }
+      });
+    }
+  }
+
+  void _nextPage() {
+    final currentPages = _chunkPagesCache[_currentChunkIndex] ?? [];
+    if (_currentPageInChunk < currentPages.length - 1) {
+      _turnViewKey.currentState?.jumpToPage(_currentPageInChunk + 1);
+    } else if (_currentChunkIndex < _engine.chunks.length - 1) {
+      _loadChunkPages(_currentChunkIndex + 1, isCurrentDisplayChunk: true).then((_) {
+        _turnViewKey.currentState?.jumpToPage(0);
+      });
+    }
   }
 
   Future<void> _jumpToChapter(TxtChapterItem chapter) async {
@@ -368,6 +418,59 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         ).then((_) {
           _preloadAdjacentChunks(_currentChunkIndex);
         });
+      },
+    );
+  }
+
+  /// 核心实现：3x3 九宫格热区触控引擎
+  Widget _buildNineGridGestureLayer() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final totalWidth = constraints.maxWidth;
+        final totalHeight = constraints.maxHeight;
+
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTapUp: (details) {
+            // 控制栏显示时，轻触屏幕任意区域仅收起控制栏
+            if (_showControls) {
+              setState(() => _showControls = false);
+              return;
+            }
+
+            final dx = details.localPosition.dx;
+            final dy = details.localPosition.dy;
+
+            // 计算所在的行和列 (0, 1, 2)
+            final col = (dx / (totalWidth / 3)).clamp(0.0, 2.0).toInt();
+            final row = (dy / (totalHeight / 3)).clamp(0.0, 2.0).toInt();
+
+            // 转化为 1 ~ 9 号区域
+            final zone = row * 3 + col + 1;
+
+            // 区域 5：唤起控制菜单
+            if (zone == 5) {
+              setState(() => _showControls = true);
+              return;
+            }
+
+            if (_handMode == HandMode.standard) {
+              // 常规手势：1、2、3、4 上一页；6、7、8、9 下一页
+              if (zone >= 1 && zone <= 4) {
+                _prevPage();
+              } else {
+                _nextPage();
+              }
+            } else {
+              // 单手模式：1、2 上一页；3、4、6、7、8、9 下一页
+              if (zone == 1 || zone == 2) {
+                _prevPage();
+              } else {
+                _nextPage();
+              }
+            }
+          },
+        );
       },
     );
   }
@@ -457,6 +560,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         ),
         body: Stack(
           children: [
+            // 1. 底层排版渲染视图
             currentPages.isEmpty
                 ? const Center(child: CircularProgressIndicator(color: Color(0xFF382E25)))
                 : PageTurnView(
@@ -465,7 +569,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                     itemCount: currentPages.length,
                     initialIndex: _currentPageInChunk,
                     onPageChanged: _onPageChanged,
-                    onCenterTap: () => setState(() => _showControls = !_showControls),
                     pageBuilder: (context, index) {
                       return _buildPageLayout(
                         currentPages[index],
@@ -475,7 +578,13 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                     },
                   ),
 
-            // 顶部控制条
+            // 2. 顶层 3x3 九宫格手势拦截层
+            if (currentPages.isNotEmpty)
+              Positioned.fill(
+                child: _buildNineGridGestureLayer(),
+              ),
+
+            // 3. 顶部控制条
             if (_showControls)
               Positioned(
                 top: 0,
@@ -512,7 +621,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                 ),
               ),
 
-            // 底部控制面板
+            // 4. 底部控制面板
             if (_showControls)
               Positioned(
                 bottom: 0,
@@ -526,7 +635,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // 1. 进度滑条
+                        // 进度滑条
                         Slider(
                           value: _currentChunkIndex.toDouble().clamp(0.0, (_engine.chunks.length - 1).toDouble()),
                           min: 0,
@@ -558,7 +667,42 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                         ),
                         const Divider(color: Colors.white24, height: 16),
 
-                        // 2. 翻页模式选择
+                        // 手势模式切换（常规手势 / 单手模式）
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text('手势操作', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                            Row(
+                              children: HandMode.values.map((mode) {
+                                final isSelected = _handMode == mode;
+                                return Padding(
+                                  padding: const EdgeInsets.only(left: 6),
+                                  child: ChoiceChip(
+                                    label: Text(mode.label),
+                                    selected: isSelected,
+                                    selectedColor: const Color(0xFF5A4A3A),
+                                    backgroundColor: Colors.white.withValues(alpha: 0.12),
+                                    checkmarkColor: Colors.white,
+                                    showCheckmark: false,
+                                    side: BorderSide(
+                                      color: isSelected ? const Color(0xFF8D7358) : Colors.transparent,
+                                      width: 1,
+                                    ),
+                                    labelStyle: TextStyle(
+                                      color: isSelected ? Colors.white : Colors.white70,
+                                      fontSize: 11,
+                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                    ),
+                                    onSelected: (_) => _saveHandMode(mode),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+
+                        // 翻页模式选择
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                           children: PageTurnMode.values.map((mode) {
@@ -587,7 +731,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                         ),
                         const SizedBox(height: 10),
 
-                        // 3. 排版与主题切换
+                        // 排版与主题切换
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [

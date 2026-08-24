@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
@@ -9,6 +10,14 @@ import '../core/page_turn_mode.dart';
 import '../widgets/typography_config.dart';
 import '../widgets/typography_settings_modal.dart';
 import '../services/app_logger.dart';
+
+enum HandMode {
+  standard('常规手势'),
+  oneHand('单手模式');
+
+  final String label;
+  const HandMode(this.label);
+}
 
 class EpubChapter {
   final String label;
@@ -63,6 +72,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   List<EpubChapter> _toc = [];
 
   PageTurnMode _pageTurnMode = PageTurnMode.cover;
+  HandMode _handMode = HandMode.standard;
   TypographyConfig _typoConfig = const TypographyConfig();
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -72,6 +82,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     super.initState();
     _currentCfi = widget.initialCfi ?? '';
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    _loadHandMode();
     _initWebView();
   }
 
@@ -79,6 +90,24 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   void dispose() {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
+  }
+
+  Future<void> _loadHandMode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedMode = prefs.getString('epub_hand_mode');
+      if (savedMode == HandMode.oneHand.name && mounted) {
+        setState(() => _handMode = HandMode.oneHand);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveHandMode(HandMode mode) async {
+    setState(() => _handMode = mode);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('epub_hand_mode', mode.name);
+    } catch (_) {}
   }
 
   Future<void> _initWebView() async {
@@ -259,7 +288,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
         }));
       });
 
-      // 彻底禁用 epub.js 自带的穿透点击翻页，完全由 Flutter 层精确接管
+      // 彻底禁用 webview 内部事件穿透，完全交由 Flutter 层九宫格引擎统一分流调度
       rendition.on("rendered", function(section, iframeView) {
         const iframeDoc = iframeView.document;
         if (!iframeDoc) return;
@@ -374,6 +403,59 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     );
   }
 
+  /// 核心实现：3x3 九宫格热区触控引擎
+  Widget _buildNineGridGestureLayer() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final totalWidth = constraints.maxWidth;
+        final totalHeight = constraints.maxHeight;
+
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTapUp: (details) {
+            // 控制栏显示时，轻触屏幕任意区域仅收起控制栏
+            if (_showControls) {
+              setState(() => _showControls = false);
+              return;
+            }
+
+            final dx = details.localPosition.dx;
+            final dy = details.localPosition.dy;
+
+            // 计算所在的行和列 (0, 1, 2)
+            final col = (dx / (totalWidth / 3)).clamp(0.0, 2.0).toInt();
+            final row = (dy / (totalHeight / 3)).clamp(0.0, 2.0).toInt();
+
+            // 转化为 1 ~ 9 号区域
+            final zone = row * 3 + col + 1;
+
+            // 区域 5：始终唤起控制菜单
+            if (zone == 5) {
+              setState(() => _showControls = true);
+              return;
+            }
+
+            if (_handMode == HandMode.standard) {
+              // 常规手势：1、2、3、4 上一页；6、7、8、9 下一页
+              if (zone >= 1 && zone <= 4) {
+                _prevPage();
+              } else {
+                _nextPage();
+              }
+            } else {
+              // 单手模式：1、2 上一页；3、4、6、7、8、9 下一页
+              if (zone == 1 || zone == 2) {
+                _prevPage();
+              } else {
+                _nextPage();
+              }
+            }
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -415,56 +497,13 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
       ),
       body: Stack(
         children: [
-          // 1. 底层 WebView 容器
+          // 1. 底层 WebView 视图
           WebViewWidget(controller: _webViewController),
 
-          // 2. 核心修复：Flutter 顶层透明手势热区分流（30% 左 / 40% 中 / 30% 右）
+          // 2. 顶层 3x3 九宫格手势拦截层
           if (!_isLoading && _errorMessage == null)
             Positioned.fill(
-              child: Row(
-                children: [
-                  // 左侧 30%：上一页
-                  Expanded(
-                    flex: 3,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onTap: () {
-                        if (_showControls) {
-                          setState(() => _showControls = false);
-                        } else {
-                          _prevPage();
-                        }
-                      },
-                    ),
-                  ),
-
-                  // 中间 40%：唤起 / 隐藏菜单
-                  Expanded(
-                    flex: 4,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onTap: () {
-                        setState(() => _showControls = !_showControls);
-                      },
-                    ),
-                  ),
-
-                  // 右侧 30%：下一页
-                  Expanded(
-                    flex: 3,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onTap: () {
-                        if (_showControls) {
-                          setState(() => _showControls = false);
-                        } else {
-                          _nextPage();
-                        }
-                      },
-                    ),
-                  ),
-                ],
-              ),
+              child: _buildNineGridGestureLayer(),
             ),
 
           if (_isLoading)
@@ -554,6 +593,42 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                       ),
                       const Divider(color: Colors.white24, height: 16),
 
+                      // 手势模式切换（常规手势 / 单手模式）
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('手势操作', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                          Row(
+                            children: HandMode.values.map((mode) {
+                              final isSelected = _handMode == mode;
+                              return Padding(
+                                padding: const EdgeInsets.only(left: 6),
+                                child: ChoiceChip(
+                                  label: Text(mode.label),
+                                  selected: isSelected,
+                                  selectedColor: const Color(0xFF5A4A3A),
+                                  backgroundColor: Colors.white.withValues(alpha: 0.12),
+                                  checkmarkColor: Colors.white,
+                                  showCheckmark: false,
+                                  side: BorderSide(
+                                    color: isSelected ? const Color(0xFF8D7358) : Colors.transparent,
+                                    width: 1,
+                                  ),
+                                  labelStyle: TextStyle(
+                                    color: isSelected ? Colors.white : Colors.white70,
+                                    fontSize: 11,
+                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                  ),
+                                  onSelected: (_) => _saveHandMode(mode),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+
+                      // 翻页效果模式
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: PageTurnMode.values.map((mode) {
@@ -580,6 +655,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                       ),
                       const SizedBox(height: 10),
 
+                      // 排版与主题
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [

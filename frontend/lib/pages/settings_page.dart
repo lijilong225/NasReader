@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'login_page.dart'; // 引入登录页
 import '../services/app_logger.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -39,7 +40,6 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
     super.dispose();
   }
 
-  // 监听 App 切换到前台状态时自动重新统计
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
@@ -47,7 +47,6 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
     }
   }
 
-  // 供外部或自身调用的缓存统计方法
   Future<void> calculateCacheSize() async {
     if (_isCalculating) return;
     _isCalculating = true;
@@ -55,13 +54,11 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
     try {
       int totalBytes = 0;
 
-      // 统计临时缓存目录
       final tempDir = await getTemporaryDirectory();
       if (tempDir.existsSync()) {
         totalBytes += await _getDirSize(tempDir);
       }
 
-      // 统计已下载书籍目录
       final appDir = await getApplicationDocumentsDirectory();
       final booksDir = Directory(p.join(appDir.path, 'books'));
       if (booksDir.existsSync()) {
@@ -106,7 +103,6 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
-  // 清除缓存逻辑
   Future<void> _clearCache() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -173,17 +169,50 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
     }
   }
 
+  // 退出登录逻辑：增加弹窗确认 + 清理凭证 + 路由重定向
   Future<void> _handleLogout() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('退出登录'),
+        content: const Text('确定要退出当前账号并返回登录页吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('退出', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('jwt_token');
       await prefs.remove('auth_token');
       await prefs.remove('token');
-    } catch (_) {}
+      await prefs.remove('is_logged_in');
+    } catch (e) {
+      AppLogger.log('❌ 清理 Token 异常: $e');
+    }
 
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已退出登录')),
+
+    // 清空整个路由栈，重定向到登录页
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 150),
+        pageBuilder: (context, animation, secondaryAnimation) => const LoginPage(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+      ),
+      (route) => false,
     );
   }
 

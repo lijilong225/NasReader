@@ -102,10 +102,10 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
           extension: ext,
           localFile: localFile,
           remotePath: pItem.filePath,
-          progressPercent: pItem.progressPercent,
+          progressPercent: pItem.progress,
           epubCfi: pItem.epubCfi,
           txtByteOffset: pItem.txtByteOffset,
-          lastReadTime: DateTime.fromMillisecondsSinceEpoch(pItem.lastReadTime),
+          lastReadTime: DateTime.fromMillisecondsSinceEpoch(pItem.clientUpdatedAt),
         );
       }
 
@@ -200,7 +200,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
                 title: book.title,
                 filePath: book.remotePath,
                 progressPercent: progress,
-                txtByteOffset: byteOffset,
+                locator: byteOffset.toString(),
               );
             },
           ),
@@ -226,7 +226,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
                 title: book.title,
                 filePath: book.remotePath,
                 progressPercent: progress,
-                epubCfi: cfi,
+                locator: cfi,
               );
             },
           ),

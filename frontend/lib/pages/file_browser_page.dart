@@ -369,8 +369,9 @@ class FileBrowserPageState extends State<FileBrowserPage> {
         bookId: item.name,
         title: p.basenameWithoutExtension(item.name),
         filePath: item.path,
-        progressPercent: 0.0,
-        lastReadTime: 0,
+        progress: 0.0,
+        locator: '',
+        clientUpdatedAt: 0,
       ),
     );
 
@@ -395,7 +396,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
                 title: p.basenameWithoutExtension(item.name),
                 filePath: item.path,
                 progressPercent: progress,
-                txtByteOffset: byteOffset,
+                locator: byteOffset.toString(),
               );
             },
           ),
@@ -421,7 +422,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
                 title: p.basenameWithoutExtension(item.name),
                 filePath: item.path,
                 progressPercent: progress,
-                epubCfi: cfi,
+                locator: cfi,
               );
             },
           ),

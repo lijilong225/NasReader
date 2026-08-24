@@ -26,20 +26,29 @@ class NasFileItem {
   final String path;
   final bool isDir;
   final int size;
+  final String? bookId;
 
   NasFileItem({
     required this.name,
     required this.path,
     required this.isDir,
     required this.size,
+    this.bookId,
   });
 
   factory NasFileItem.fromJson(Map<String, dynamic> json) {
+    // 确保 path 规范为以 / 开头的绝对路径表示法
+    String rawPath = (json['path'] ?? '').toString();
+    if (!rawPath.startsWith('/')) {
+      rawPath = '/$rawPath';
+    }
+
     return NasFileItem(
       name: json['name'] ?? '',
-      path: json['path'] ?? '',
-      isDir: json['is_dir'] ?? false,
+      path: rawPath,
+      isDir: json['is_dir'] == true,
       size: (json['size'] as num?)?.toInt() ?? 0,
+      bookId: json['book_id']?.toString(),
     );
   }
 }
@@ -164,17 +173,26 @@ class FileBrowserPageState extends State<FileBrowserPage> {
         queryParameters: {'path': targetPath},
       );
 
-      AppLogger.log('📂 加载目录 $targetPath 成功，文件数: ${res.data['data']?.length ?? 0}');
+      AppLogger.log('📂 请求目录: $res.data');
 
       if (res.statusCode == 200 && res.data != null) {
         List<dynamic> rawList = [];
-        if (res.data is Map && res.data['data'] is List) {
+
+        // 优先读取 Go 后端返回的 items 字段
+        if (res.data is Map && res.data['items'] is List) {
+          rawList = res.data['items'];
+        } else if (res.data is Map && res.data['data'] is List) {
           rawList = res.data['data'];
         } else if (res.data is List) {
           rawList = res.data;
         }
 
-        _items = rawList.map((e) => NasFileItem.fromJson(e)).toList();
+        AppLogger.log('📂 成功加载目录 $targetPath, 解析到文件数: ${rawList.length}');
+
+        _items = rawList
+            .map((e) => NasFileItem.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+
         _applySort();
 
         if (mounted) {

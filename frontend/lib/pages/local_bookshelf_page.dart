@@ -142,6 +142,68 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
     }
   }
 
+  /// 长按删除书籍（本地缓存 + 阅读进度 + 书签 + 云端记录）
+  Future<void> _handleDeleteBook(BookshelfItem book) async {
+    final bool? shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('从书架移除', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Text(
+          '确定要从书架删除《${book.title}》吗？\n\n'
+          '• 本地缓存文件将被清理\n'
+          '• 相关阅读进度与书签将同步删除\n'
+          '• NAS 原始文件不受影响，可随时重新下载',
+          style: const TextStyle(fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.redAccent.shade700,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('确认删除'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldDelete != true) return;
+
+    try {
+      // 1. 删除本地物理缓存文件
+      if (book.localFile != null && await book.localFile!.exists()) {
+        await book.localFile!.delete();
+      }
+
+      // 2. 级联清理本地存储并通知后端删除阅读记录与书签
+      await ProgressSyncService.deleteBookEverything(book.bookId, widget.dio);
+
+      // 3. 重新加载书架视图
+      await loadLocalBooks();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已从书架移除《${book.title}》'),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      AppLogger.log('❌ 删除书籍异常: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('删除失败: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
+  }
+
   Future<void> _openOrDownloadBook(BookshelfItem book) async {
     File targetFile;
 
@@ -322,6 +384,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
             color: Colors.grey,
           ),
           onTap: () => _openOrDownloadBook(book),
+          onLongPress: () => _handleDeleteBook(book), // 👈 长按触发删除弹窗
         );
       },
     );

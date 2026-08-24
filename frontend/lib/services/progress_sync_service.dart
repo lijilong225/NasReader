@@ -219,4 +219,37 @@ class ProgressSyncService {
     list.sort((a, b) => b.clientUpdatedAt.compareTo(a.clientUpdatedAt));
     return list;
   }
+
+  /// 5. 彻底删除单本书籍数据（本地缓存、进度、书签，并同步通知远端）
+  static Future<void> deleteBookEverything(String bookId, [Dio? dio]) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    // 1. 清理本地 SharedPreferences 阅读进度 Map
+    final rawMap = prefs.getString(_storageKey);
+    if (rawMap != null) {
+      Map<String, dynamic> map = jsonDecode(rawMap);
+      map.remove(bookId);
+      await prefs.setString(_storageKey, jsonEncode(map));
+    }
+
+    // 2. 清理本地 SharedPreferences 书签记录
+    await prefs.remove('local_bookmarks_$bookId');
+
+    // 3. 异步上报后端清除云端记录（不删除 NAS 原始文件）
+    if (ApiConfig.isLoggedIn) {
+      try {
+        final client = _getDio(dio);
+        final res = await client.post(
+          '/api/v1/sync/delete',
+          data: {
+            'book_id': bookId,
+            'user_id': ApiConfig.currentUser?.id.toString(),
+          },
+        );
+        AppLogger.log('🗑️ 远端同步数据已清除: $bookId (HTTP ${res.statusCode})');
+      } catch (e) {
+        AppLogger.log('⚠️ 远端数据清除请求异常: $e');
+      }
+    }
+  }
 }

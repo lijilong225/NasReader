@@ -48,6 +48,9 @@ func main() {
 			// 2. 书签双向同步 (新增)
 			syncGroup.GET("/bookmarks/:book_id", handlers.GetBookmarks)
 			syncGroup.POST("/bookmarks", handlers.SyncBookmarks)
+
+			// 3. 批量删除书籍云端记录（进度 + 书签）
+			syncGroup.POST("/delete", handlers.DeleteBookSyncData)
 		}
 
 		// 文件系统相关接口

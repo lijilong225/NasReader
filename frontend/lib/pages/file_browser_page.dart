@@ -13,6 +13,8 @@ import '../services/app_logger.dart';
 enum FileSortType {
   nameAsc('名称 (A-Z)'),
   nameDesc('名称 (Z-A)'),
+  timeDesc('时间 (从新到旧)'),
+  timeAsc('时间 (从旧到新)'),
   sizeAsc('体积 (从小到大)'),
   sizeDesc('体积 (从大到小)'),
   type('按文件类型');
@@ -27,6 +29,7 @@ class NasFileItem {
   final bool isDir;
   final int size;
   final String? bookId;
+  final int modTime; // 毫秒时间戳
 
   NasFileItem({
     required this.name,
@@ -34,14 +37,19 @@ class NasFileItem {
     required this.isDir,
     required this.size,
     this.bookId,
+    required this.modTime,
   });
 
   factory NasFileItem.fromJson(Map<String, dynamic> json) {
-    // 确保 path 规范为以 / 开头的绝对路径表示法
     String rawPath = (json['path'] ?? '').toString();
     if (!rawPath.startsWith('/')) {
       rawPath = '/$rawPath';
     }
+
+    final rawModTime = json['mod_time'] ?? json['ModTime'] ?? 0;
+    final modTime = (rawModTime is num)
+        ? rawModTime.toInt()
+        : (int.tryParse(rawModTime.toString()) ?? 0);
 
     return NasFileItem(
       name: json['name'] ?? '',
@@ -49,6 +57,7 @@ class NasFileItem {
       isDir: json['is_dir'] == true,
       size: (json['size'] as num?)?.toInt() ?? 0,
       bookId: json['book_id']?.toString(),
+      modTime: modTime,
     );
   }
 }
@@ -70,8 +79,8 @@ class FileBrowserPageState extends State<FileBrowserPage> {
   bool _isLoading = true;
   String? _errorMessage;
 
-  // 默认排序：按名称升序
-  FileSortType _currentSort = FileSortType.nameAsc;
+  // 默认排序：按时间从新到旧
+  FileSortType _currentSort = FileSortType.timeDesc;
 
   final Set<String> _cachedFileNames = {};
 
@@ -94,7 +103,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
       if (savedSortName != null) {
         _currentSort = FileSortType.values.firstWhere(
           (e) => e.name == savedSortName,
-          orElse: () => FileSortType.nameAsc,
+          orElse: () => FileSortType.timeDesc,
         );
       }
     } catch (_) {}
@@ -115,7 +124,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     }
   }
 
-  // 3. 排序执行逻辑（文件夹永远置顶）
+  // 3. 排序执行逻辑（文件夹置顶）
   void _applySort() {
     _items.sort((a, b) {
       if (a.isDir && !b.isDir) return -1;
@@ -126,10 +135,18 @@ class FileBrowserPageState extends State<FileBrowserPage> {
           return a.name.toLowerCase().compareTo(b.name.toLowerCase());
         case FileSortType.nameDesc:
           return b.name.toLowerCase().compareTo(a.name.toLowerCase());
+        case FileSortType.timeDesc:
+          final comp = b.modTime.compareTo(a.modTime);
+          return comp != 0 ? comp : a.name.toLowerCase().compareTo(b.name.toLowerCase());
+        case FileSortType.timeAsc:
+          final comp = a.modTime.compareTo(b.modTime);
+          return comp != 0 ? comp : a.name.toLowerCase().compareTo(b.name.toLowerCase());
         case FileSortType.sizeAsc:
-          return a.size.compareTo(b.size);
+          final comp = a.size.compareTo(b.size);
+          return comp != 0 ? comp : a.name.toLowerCase().compareTo(b.name.toLowerCase());
         case FileSortType.sizeDesc:
-          return b.size.compareTo(a.size);
+          final comp = b.size.compareTo(a.size);
+          return comp != 0 ? comp : a.name.toLowerCase().compareTo(b.name.toLowerCase());
         case FileSortType.type:
           final extA = p.extension(a.name).toLowerCase();
           final extB = p.extension(b.name).toLowerCase();
@@ -173,12 +190,11 @@ class FileBrowserPageState extends State<FileBrowserPage> {
         queryParameters: {'path': targetPath},
       );
 
-      AppLogger.log('📂 请求目录: $res.data');
+      AppLogger.log('📂 请求目录: ${res.data}');
 
       if (res.statusCode == 200 && res.data != null) {
         List<dynamic> rawList = [];
 
-        // 优先读取 Go 后端返回的 items 字段
         if (res.data is Map && res.data['items'] is List) {
           rawList = res.data['items'];
         } else if (res.data is Map && res.data['data'] is List) {
@@ -444,7 +460,6 @@ class FileBrowserPageState extends State<FileBrowserPage> {
                 )
               : null,
           actions: [
-            // 排序菜单按钮
             PopupMenuButton<FileSortType>(
               icon: const Icon(Icons.sort),
               tooltip: '排序方式',

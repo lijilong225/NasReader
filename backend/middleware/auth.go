@@ -19,7 +19,7 @@ func GetJwtSecret() []byte {
     secret := os.Getenv("JWT_SECRET")
     if secret == "" {
         // 如果未设置环境变量，生产环境强制拦截或使用高强度默认值
-        secret = "KRgrsl95Xcmt8544yalYu7Yzf4BypRmQzl2Vw"
+        secret = "default_secret_key_please_change"
     }
     return []byte(secret)
 }

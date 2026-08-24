@@ -615,7 +615,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                                     width: 1,
                                   ),
                                   labelStyle: TextStyle(
-                                    color: isSelected ? Colors.white : Colors.white70,
+                                    color: isSelected ? Colors.white : Colors.black87,
                                     fontSize: 11,
                                     fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                                   ),

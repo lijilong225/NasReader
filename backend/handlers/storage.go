@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"utils"
 
 	"github.com/gin-gonic/gin"
 )
@@ -36,6 +37,17 @@ type FileNode struct {
 
 // BrowseDirectory 浏览目录（支持子目录分页/原样透传）
 func BrowseDirectory(c *gin.Context) {
+	targetDir, err := utils.SafeResolvePath(c.DefaultQuery("path", "/"))
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
+	entries, err := os.ReadDir(targetDir)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "目录不存在或无法读取"})
+		return
+	}
+
 	relPath := c.DefaultQuery("path", "/")
 
 	// 路径防穿透安全检查
@@ -99,28 +111,48 @@ func BrowseDirectory(c *gin.Context) {
 	})
 }
 
-// DownloadFile 支持 Range 断点续传的文件下载接口
 func DownloadFile(c *gin.Context) {
 	relPath := c.Query("path")
 	if relPath == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Path parameter is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 path 参数"})
 		return
 	}
 
-	cleanRelPath := filepath.Clean(relPath)
-	if strings.HasPrefix(cleanRelPath, "..") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid file path"})
+	// 1. 使用 safe_path 校验并解析目标绝对路径
+	targetFilePath, err := utils.SafeResolvePath(relPath)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
 
-	targetFilePath := filepath.Join(NASBasePath, cleanRelPath)
+	// 2. 检查目标是否存在且非目录
 	fileInfo, err := os.Stat(targetFilePath)
-	if err != nil || fileInfo.IsDir() {
-		c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法读取文件信息"})
 		return
 	}
 
-	// c.File 会自动处理 HTTP Range（断点续传）和 Content-Type
+	if fileInfo.IsDir() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "目标为目录，不支持直接下载"})
+		return
+	}
+
+	// 3. 电子书格式白名单（防止暴露同目录下的 .nfo, .json, .sh 等文件）
+	ext := strings.ToLower(filepath.Ext(targetFilePath))
+	if ext != ".txt" && ext != ".epub" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "不支持下载非电子书文件"})
+		return
+	}
+
+	// 4. 设置安全下载头（兼容中文文件名）
+	filename := filepath.Base(targetFilePath)
+	c.Header("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(filename))
+
+	// 5. 传输文件（支持 HTTP Range 断点续传）
 	c.File(targetFilePath)
 }
 

@@ -9,12 +9,19 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-var JwtSecret = []byte("your-custom-secure-secret-key-change-it")
-
 type Claims struct {
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`
 	jwt.RegisteredClaims
+}
+
+func GetJwtSecret() []byte {
+    secret := os.Getenv("JWT_SECRET")
+    if secret == "" {
+        // 如果未设置环境变量，生产环境强制拦截或使用高强度默认值
+        secret = "KRgrsl95Xcmt8544yalYu7Yzf4BypRmQzl2Vw"
+    }
+    return []byte(secret)
 }
 
 // GenerateToken 生成 7 天有效期的 JWT
@@ -28,7 +35,7 @@ func GenerateToken(userID, username string) (string, error) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(JwtSecret)
+	return token.SignedString(GetJwtSecret())
 }
 
 // AuthMiddleware 验证请求头中的 Bearer Token
@@ -43,7 +50,7 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 		token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-			return JwtSecret, nil
+			return GetJwtSecret(), nil
 		})
 
 		if err != nil || !token.Valid {

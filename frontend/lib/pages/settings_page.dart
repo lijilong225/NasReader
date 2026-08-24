@@ -171,7 +171,7 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
     }
   }
 
-// 退出登录逻辑：增加弹窗确认 + 清理凭证 + 路由重定向
+  // 退出登录逻辑
   Future<void> _handleLogout() async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -194,7 +194,7 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
     if (confirm != true) return;
 
     try {
-      // 1. 同步清理 ApiConfig 内存态、监听器与持久化 Token/用户信息
+      // 1. 同步清理 ApiConfig 内存态与持久化凭证
       await ApiConfig.onLogout();
 
       // 2. 清理 AuthService 中的存储标记
@@ -224,9 +224,61 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
     );
   }
 
+  // 关于 App 概述弹窗
+  void _showAboutDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.auto_stories, color: Color(0xFF5A4A3A)),
+            SizedBox(width: 8),
+            Text('关于 NAS Reader'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'NAS Reader 是一款面向个人 NAS 私有云的书籍阅读与多设备同步工具。',
+              style: TextStyle(fontSize: 13, height: 1.5),
+            ),
+            const SizedBox(height: 12),
+            const Text('核心功能：', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Text(
+              '• 支持 TXT 高速排版引擎与 EPUB 精准重排\n'
+              '• 挂载 NAS 物理存储目录，支持即点即读与离线缓存\n'
+              '• 基于 LWW 策略的云端进度与书签跨设备毫秒级同步\n'
+              '• 原生跟手滑动翻页与手势热区定制',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade700, height: 1.4),
+            ),
+            const SizedBox(height: 12),
+            const Divider(),
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('版本', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                Text('v1.0.0', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentTheme = widget.themeNotifier?.value ?? ThemeMode.system;
+    final user = ApiConfig.currentUser;
 
     return Scaffold(
       appBar: AppBar(
@@ -246,47 +298,80 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
           children: [
             const SizedBox(height: 8),
 
+            // 1. 账号中心入口
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Text('账号与服务', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+            ),
+            ListTile(
+              leading: CircleAvatar(
+                radius: 18,
+                backgroundColor: const Color(0xFF5A4A3A),
+                child: Text(
+                  (user?.username.isNotEmpty ?? false)
+                      ? user!.username[0].toUpperCase()
+                      : 'U',
+                  style: const TextStyle(fontSize: 14, color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              ),
+              title: const Text('账号中心'),
+              subtitle: Text(
+                ApiConfig.isLoggedIn
+                    ? (user?.nickname?.isNotEmpty == true ? user!.nickname! : (user?.username ?? '已登录'))
+                    : '未登录',
+                style: const TextStyle(fontSize: 12),
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => AccountCenterPage(onLogout: _handleLogout),
+                  ),
+                );
+              },
+            ),
+            const Divider(),
+            // 2. 外观与主题
+            // 外观与主题
             if (widget.themeNotifier != null) ...[
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Text('外观与主题', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
               ),
-              ListTile(
-                leading: const Icon(Icons.brightness_auto),
-                title: const Text('跟随系统'),
-                trailing: Radio<ThemeMode>(
-                  value: ThemeMode.system,
-                  groupValue: currentTheme,
-                  onChanged: (val) {
-                    if (val != null) widget.themeNotifier!.value = val;
-                  },
-                ),
-              ),
-              ListTile(
-                leading: const Icon(Icons.light_mode),
-                title: const Text('浅色模式'),
-                trailing: Radio<ThemeMode>(
-                  value: ThemeMode.light,
-                  groupValue: currentTheme,
-                  onChanged: (val) {
-                    if (val != null) widget.themeNotifier!.value = val;
-                  },
-                ),
-              ),
-              ListTile(
-                leading: const Icon(Icons.dark_mode),
-                title: const Text('深色模式'),
-                trailing: Radio<ThemeMode>(
-                  value: ThemeMode.dark,
-                  groupValue: currentTheme,
-                  onChanged: (val) {
-                    if (val != null) widget.themeNotifier!.value = val;
-                  },
+              RadioGroup<ThemeMode>(
+                groupValue: currentTheme,
+                onChanged: (val) {
+                  if (val != null) {
+                    setState(() {
+                      widget.themeNotifier!.value = val;
+                    });
+                  }
+                },
+                child: Column(
+                  children: const [
+                    RadioListTile<ThemeMode>(
+                      secondary: Icon(Icons.brightness_auto),
+                      title: Text('跟随系统'),
+                      value: ThemeMode.system,
+                    ),
+                    RadioListTile<ThemeMode>(
+                      secondary: Icon(Icons.light_mode),
+                      title: Text('浅色模式'),
+                      value: ThemeMode.light,
+                    ),
+                    RadioListTile<ThemeMode>(
+                      secondary: Icon(Icons.dark_mode),
+                      title: Text('深色模式'),
+                      value: ThemeMode.dark,
+                    ),
+                  ],
                 ),
               ),
               const Divider(),
             ],
 
+            // 3. 存储与诊断
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text('存储与诊断', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
@@ -311,9 +396,20 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
               trailing: const Icon(Icons.chevron_right),
               onTap: () => AppLogger.showLogModal(context),
             ),
-
             const Divider(),
 
+            // 4. 关于与登出
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Text('系统信息', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('关于'),
+              subtitle: const Text('App 概述与版本信息'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: _showAboutDialog,
+            ),
             ListTile(
               leading: const Icon(Icons.logout, color: Colors.redAccent),
               title: const Text('退出登录', style: TextStyle(color: Colors.redAccent)),
@@ -321,6 +417,123 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 账号信息二级页面
+class AccountCenterPage extends StatelessWidget {
+  final Future<void> Function()? onLogout;
+
+  const AccountCenterPage({super.key, this.onLogout});
+
+  @override
+  Widget build(BuildContext context) {
+    final user = ApiConfig.currentUser;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('账号中心'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            elevation: 0,
+            color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 32,
+                    backgroundColor: const Color(0xFF5A4A3A),
+                    child: Text(
+                      (user?.username.isNotEmpty ?? false)
+                          ? user!.username[0].toUpperCase()
+                          : 'U',
+                      style: const TextStyle(fontSize: 24, color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          user?.nickname?.isNotEmpty == true
+                              ? user!.nickname!
+                              : (user?.username ?? '未登录'),
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '用户 ID: ${user?.id ?? "未知"}',
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                        ),
+                        if (user?.email != null && user!.email!.isNotEmpty)
+                          Text(
+                            user.email!,
+                            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text('服务状态', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey)),
+          const SizedBox(height: 8),
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+              side: BorderSide(color: Colors.grey.shade300),
+            ),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.cloud_outlined, color: Colors.blueAccent),
+                  title: const Text('远端服务地址', style: TextStyle(fontSize: 14)),
+                  subtitle: Text(
+                    ApiConfig.baseUrl.isNotEmpty ? ApiConfig.baseUrl : '未配置',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.sync_lock_outlined, color: Colors.green),
+                  title: const Text('多端同步状态', style: TextStyle(fontSize: 14)),
+                  trailing: Text(
+                    ApiConfig.isLoggedIn ? '已连接' : '未授权',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: ApiConfig.isLoggedIn ? Colors.green : Colors.redAccent,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 32),
+          FilledButton.tonal(
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              foregroundColor: Colors.redAccent,
+              backgroundColor: Colors.redAccent.withValues(alpha: 0.1),
+            ),
+            onPressed: () {
+              Navigator.pop(context);
+              onLogout?.call();
+            },
+            child: const Text('退出登录', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
       ),
     );
   }

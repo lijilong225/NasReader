@@ -7,7 +7,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/full_txt_engine.dart';
 import '../core/reader_theme.dart';
-import '../core/page_turn_mode.dart';
 import '../core/page_turn_view.dart';
 import '../widgets/typography_config.dart';
 import '../widgets/typography_settings_modal.dart';
@@ -58,7 +57,6 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   bool _isTurningPage = false; // 防抖锁状态标记
 
   ReaderThemeData _currentTheme = ReaderThemes.parchment;
-  PageTurnMode _pageTurnMode = PageTurnMode.none;
   HandMode _handMode = HandMode.standard;
   TypographyConfig _typoConfig = const TypographyConfig();
 
@@ -283,7 +281,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     _saveCurrentProgress();
   }
 
-  /// 统一的翻页调度引擎（支持防抖锁与即时状态同步）
+  /// 点击瞬切调度（无过渡动画）
   void _turnToPage(int targetIndex) {
     if (_isTurningPage) return;
     if (targetIndex < 0 || targetIndex >= _pages.length) return;
@@ -296,7 +294,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     _turnViewKey.currentState?.jumpToPage(targetIndex);
 
     // 延时释放防抖保护
-    Future.delayed(const Duration(milliseconds: 120), () {
+    Future.delayed(const Duration(milliseconds: 100), () {
       if (mounted) {
         _isTurningPage = false;
       }
@@ -335,7 +333,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     );
   }
 
-  /// 3x3 九宫格热区触控引擎
+  /// 3x3 九宫格与水平手势复合层（点击瞬切 + 跟手滑动翻页共存）
   Widget _buildNineGridGestureLayer() {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -344,6 +342,20 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
         return GestureDetector(
           behavior: HitTestBehavior.translucent,
+          // 水平跟手拖动
+          onHorizontalDragStart: (details) {
+            if (_showControls) return;
+            _turnViewKey.currentState?.handleHorizontalDragStart(details);
+          },
+          onHorizontalDragUpdate: (details) {
+            if (_showControls) return;
+            _turnViewKey.currentState?.handleHorizontalDragUpdate(details, totalWidth);
+          },
+          onHorizontalDragEnd: (details) {
+            if (_showControls) return;
+            _turnViewKey.currentState?.handleHorizontalDragEnd(details, totalWidth);
+          },
+          // 点击瞬切
           onTapUp: (details) {
             if (_isTurningPage) return; // 拦截高频并发点击
 
@@ -457,10 +469,9 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         ),
         body: Stack(
           children: [
-            // 1. 全局单层翻页视图
+            // 1. 全局单层翻页视图（默认无动画瞬切 + 滑动露底共存）
             PageTurnView(
               key: _turnViewKey,
-              mode: _pageTurnMode,
               itemCount: _pages.length,
               initialIndex: _currentPageIndex,
               onPageChanged: _onPageChanged,
@@ -469,7 +480,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
               },
             ),
 
-            // 2. 顶层 3x3 九宫格手势拦截层
+            // 2. 顶层 3x3 九宫格与滑动拦截层
             Positioned.fill(
               child: _buildNineGridGestureLayer(),
             ),
@@ -593,37 +604,9 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 12),
 
-                        // 翻页效果切换
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          children: PageTurnMode.values.map((mode) {
-                            final isSelected = _pageTurnMode == mode;
-                            return ChoiceChip(
-                              label: Text(mode.label),
-                              selected: isSelected,
-                              selectedColor: const Color(0xFF5A4A3A),
-                              backgroundColor: Colors.white.withValues(alpha: 0.85),
-                              checkmarkColor: Colors.white,
-                              showCheckmark: false,
-                              side: BorderSide(
-                                color: isSelected ? const Color(0xFF8D7358) : Colors.transparent,
-                              ),
-                              labelStyle: TextStyle(
-                                color: isSelected ? Colors.white : Colors.black87,
-                                fontSize: 12,
-                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                              ),
-                              onSelected: (_) {
-                                setState(() => _pageTurnMode = mode);
-                              },
-                            );
-                          }).toList(),
-                        ),
-                        const SizedBox(height: 10),
-
-                        // 排版与主题切换
+                        // 排版与主题切换（已移除旧翻页选项）
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
@@ -684,7 +667,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
     final hasChapterHeader = slice.chapterTitle != null && slice.chapterTitle!.isNotEmpty;
 
-    // 清洗正文：彻底剥离开头可能残留的重复标题与空行
+    // 清洗正文：剥离开头残留的重复标题与空行
     String cleanContent = slice.content;
     if (hasChapterHeader) {
       final title = slice.chapterTitle!.trim();
@@ -724,7 +707,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                 child: Text.rich(
                   TextSpan(
                     children: [
-                      // 1. 加粗加大章节大标题（仅隔 1 行）
+                      // 1. 章节大标题
                       if (hasChapterHeader)
                         TextSpan(
                           text: '${slice.chapterTitle!}\n',
@@ -737,7 +720,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                             color: _currentTheme.textColor,
                           ),
                         ),
-                      // 2. 纯净的正文内容
+                      // 2. 正文内容
                       TextSpan(
                         text: cleanContent,
                         style: TextStyle(

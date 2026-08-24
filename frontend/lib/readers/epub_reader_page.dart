@@ -6,7 +6,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
-import '../core/page_turn_mode.dart';
 import '../models/bookmark_model.dart';
 import '../services/bookmark_sync_service.dart';
 import '../widgets/reader_drawer.dart';
@@ -63,7 +62,7 @@ class EpubReaderPage extends StatefulWidget {
   State<EpubReaderPage> createState() => _EpubReaderPageState();
 }
 
-class _EpubReaderPageState extends State<EpubReaderPage> {
+class _EpubReaderPageState extends State<EpubReaderPage> with SingleTickerProviderStateMixin {
   late final WebViewController _webViewController;
 
   bool _isLoading = true;
@@ -72,11 +71,17 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   double _currentProgress = 0.0;
   String _currentCfi = '';
   List<EpubChapter> _toc = [];
-  List<Bookmark> _bookmarks = []; // 👈 1. 书签状态列表
+  List<Bookmark> _bookmarks = [];
 
-  PageTurnMode _pageTurnMode = PageTurnMode.cover;
   HandMode _handMode = HandMode.standard;
   TypographyConfig _typoConfig = const TypographyConfig();
+
+  // 翻页状态与动画控制
+  bool _isTurningPage = false;
+  double _dragOffset = 0.0;
+  bool _isDragging = false;
+  late AnimationController _animController;
+  Animation<double>? _slideAnimation;
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
@@ -85,13 +90,18 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     super.initState();
     _currentCfi = widget.initialCfi ?? '';
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    );
     _loadHandMode();
-    _loadBookmarks(); // 👈 2. 启动时拉取并同步书签
+    _loadBookmarks();
     _initWebView();
   }
 
   @override
   void dispose() {
+    _animController.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
@@ -114,7 +124,6 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     } catch (_) {}
   }
 
-  // 👈 3. 书签同步拉取
   Future<void> _loadBookmarks() async {
     try {
       final list = await BookmarkSyncService.syncWithServer(widget.bookId);
@@ -124,7 +133,6 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     }
   }
 
-  // 👈 4. 添加书签（支持双向同步与提示）
   Future<void> _toggleEpubBookmark() async {
     if (_currentCfi.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -156,7 +164,6 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     }
   }
 
-  // 👈 5. 书签精准跳转（带安全转义）
   void _jumpToEpubBookmark(Bookmark b) {
     Navigator.pop(context);
     if (b.cfi != null && b.cfi!.isNotEmpty) {
@@ -390,9 +397,6 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
           'p': { 'color': textColor + ' !important' }
         });
       };
-      window.setFlow = (flowMode) => {
-        rendition.flow(flowMode);
-      };
     } catch (e) {
       FlutterChannel.postMessage(JSON.stringify({ type: 'onError', message: e.toString() }));
     }
@@ -402,8 +406,77 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
 ''';
   }
 
-  void _nextPage() => _webViewController.runJavaScript('window.nextPage();');
-  void _prevPage() => _webViewController.runJavaScript('window.prevPage();');
+  // 纯点击瞬切逻辑（带防抖拦截）
+  void _nextPage() {
+    if (_isTurningPage) return;
+    _isTurningPage = true;
+    _webViewController.runJavaScript('window.nextPage();');
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (mounted) _isTurningPage = false;
+    });
+  }
+
+  void _prevPage() {
+    if (_isTurningPage) return;
+    _isTurningPage = true;
+    _webViewController.runJavaScript('window.prevPage();');
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (mounted) _isTurningPage = false;
+    });
+  }
+
+  // --- 手势滑动跟手与整页平移动画逻辑 ---
+
+  void _handleHorizontalDragStart(DragStartDetails details) {
+    if (_animController.isAnimating) _animController.stop();
+    _isDragging = true;
+  }
+
+  void _handleHorizontalDragUpdate(DragUpdateDetails details) {
+    if (!_isDragging) return;
+    setState(() {
+      _dragOffset += details.primaryDelta ?? 0.0;
+    });
+  }
+
+  void _handleHorizontalDragEnd(DragEndDetails details, double screenWidth) {
+    _isDragging = false;
+    final velocity = details.primaryVelocity ?? 0.0;
+
+    final bool reachDistanceThreshold = _dragOffset.abs() > (screenWidth * 0.20);
+    final bool reachVelocityThreshold = velocity.abs() > 300.0;
+    final bool canFlip = reachDistanceThreshold || reachVelocityThreshold;
+
+    final bool isNext = _dragOffset < 0;
+    double targetEndOffset = 0.0;
+
+    if (canFlip) {
+      targetEndOffset = isNext ? -screenWidth : screenWidth;
+    } else {
+      targetEndOffset = 0.0; // 回弹
+    }
+
+    _slideAnimation = Tween<double>(begin: _dragOffset, end: targetEndOffset).animate(
+      CurvedAnimation(parent: _animController, curve: Curves.easeOutCubic),
+    )..addListener(() {
+        setState(() {
+          _dragOffset = _slideAnimation!.value;
+        });
+      });
+
+    _animController.forward(from: 0.0).then((_) {
+      if (canFlip) {
+        if (isNext) {
+          _webViewController.runJavaScript('window.nextPage();');
+        } else {
+          _webViewController.runJavaScript('window.prevPage();');
+        }
+      }
+      setState(() {
+        _dragOffset = 0.0;
+      });
+    });
+  }
 
   void _jumpToHref(String href) {
     if (href.trim().isEmpty) return;
@@ -425,12 +498,6 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     final bgHex = '#${bg.toARGB32().toRadixString(16).substring(2)}';
     final textHex = '#${text.toARGB32().toRadixString(16).substring(2)}';
     _webViewController.runJavaScript('window.setTheme("$bgHex", "$textHex");');
-  }
-
-  void _changePageTurnMode(PageTurnMode mode) {
-    setState(() => _pageTurnMode = mode);
-    final flow = mode == PageTurnMode.scroll ? 'scrolled-doc' : 'paginated';
-    _webViewController.runJavaScript('window.setFlow("$flow");');
   }
 
   void _applyTypographyToEpub(TypographyConfig config) {
@@ -469,7 +536,23 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
 
         return GestureDetector(
           behavior: HitTestBehavior.translucent,
+          // 水平跟手滑动支持
+          onHorizontalDragStart: (details) {
+            if (_showControls) return;
+            _handleHorizontalDragStart(details);
+          },
+          onHorizontalDragUpdate: (details) {
+            if (_showControls) return;
+            _handleHorizontalDragUpdate(details);
+          },
+          onHorizontalDragEnd: (details) {
+            if (_showControls) return;
+            _handleHorizontalDragEnd(details, totalWidth);
+          },
+          // 点击瞬切
           onTapUp: (details) {
+            if (_isTurningPage) return;
+
             if (_showControls) {
               setState(() => _showControls = false);
               return;
@@ -511,7 +594,6 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: const Color(0xFFF6EFE2),
-      // 👈 6. 替换为支持书签与目录切换的 ReaderDrawer
       drawer: ReaderDrawer(
         title: widget.title,
         bookmarks: _bookmarks,
@@ -529,10 +611,26 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
       ),
       body: Stack(
         children: [
-          // 1. 底层 WebView 视图
-          WebViewWidget(controller: _webViewController),
+          // 1. 底层 WebView 视图（支持跟手平移与边缘阴影）
+          Transform.translate(
+            offset: Offset(_dragOffset, 0),
+            child: Container(
+              decoration: BoxDecoration(
+                boxShadow: [
+                  if (_dragOffset != 0.0)
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.25),
+                      blurRadius: 14.0,
+                      spreadRadius: 1.0,
+                      offset: Offset(_dragOffset < 0 ? 6.0 : -6.0, 0),
+                    ),
+                ],
+              ),
+              child: WebViewWidget(controller: _webViewController),
+            ),
+          ),
 
-          // 2. 顶层 3x3 九宫格手势拦截层
+          // 2. 顶层 3x3 九宫格与水平滑动手势拦截层
           if (!_isLoading && _errorMessage == null)
             Positioned.fill(
               child: _buildNineGridGestureLayer(),
@@ -558,7 +656,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
               ),
             ),
 
-          // 顶部控制条（已加入添加书签按钮）
+          // 3. 顶部控制条
           if (_showControls)
             Positioned(
               top: 0,
@@ -597,7 +695,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
               ),
             ),
 
-          // 底部控制条
+          // 4. 底部控制条（已移除翻页动画选项）
           if (_showControls)
             Positioned(
               bottom: 0,
@@ -663,34 +761,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 10),
-
-                      // 翻页效果模式
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: PageTurnMode.values.map((mode) {
-                          final isSelected = _pageTurnMode == mode;
-                          return ChoiceChip(
-                            label: Text(mode.label),
-                            selected: isSelected,
-                            selectedColor: const Color(0xFF5A4A3A),
-                            backgroundColor: Colors.white.withValues(alpha: 0.12),
-                            checkmarkColor: Colors.white,
-                            showCheckmark: false,
-                            side: BorderSide(
-                              color: isSelected ? const Color(0xFF8D7358) : Colors.transparent,
-                              width: 1,
-                            ),
-                            labelStyle: TextStyle(
-                              color: isSelected ? Colors.white : Colors.black87,
-                              fontSize: 12,
-                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                            ),
-                            onSelected: (_) => _changePageTurnMode(mode),
-                          );
-                        }).toList(),
-                      ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 12),
 
                       // 排版与主题
                       Row(

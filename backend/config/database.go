@@ -33,10 +33,11 @@ func InitDB() {
 		log.Fatalf("连接 SQLite 数据库失败: %v", err)
 	}
 
-	// 3. 自动迁移数据表结构
+	// 3. 自动迁移数据表结构（增加 models.Bookmark）
 	err = DB.AutoMigrate(
 		&models.User{},
 		&models.ReadingProgress{},
+		&models.Bookmark{}, // 👈 新增书签表迁移
 	)
 	if err != nil {
 		log.Fatalf("数据库表自动迁移失败: %v", err)

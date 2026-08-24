@@ -7,6 +7,9 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../core/page_turn_mode.dart';
+import '../models/bookmark_model.dart';
+import '../services/bookmark_sync_service.dart';
+import '../widgets/reader_drawer.dart';
 import '../widgets/typography_config.dart';
 import '../widgets/typography_settings_modal.dart';
 import '../services/app_logger.dart';
@@ -67,9 +70,9 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   String? _errorMessage;
   bool _showControls = false;
   double _currentProgress = 0.0;
-  // ignore: unused_field
   String _currentCfi = '';
   List<EpubChapter> _toc = [];
+  List<Bookmark> _bookmarks = []; // 👈 1. 书签状态列表
 
   PageTurnMode _pageTurnMode = PageTurnMode.cover;
   HandMode _handMode = HandMode.standard;
@@ -83,6 +86,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     _currentCfi = widget.initialCfi ?? '';
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadHandMode();
+    _loadBookmarks(); // 👈 2. 启动时拉取并同步书签
     _initWebView();
   }
 
@@ -108,6 +112,59 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('epub_hand_mode', mode.name);
     } catch (_) {}
+  }
+
+  // 👈 3. 书签同步拉取
+  Future<void> _loadBookmarks() async {
+    try {
+      final list = await BookmarkSyncService.syncWithServer(widget.bookId);
+      if (mounted) setState(() => _bookmarks = list);
+    } catch (e) {
+      AppLogger.log('❌ 拉取 EPUB 书签失败: $e');
+    }
+  }
+
+  // 👈 4. 添加书签（支持双向同步与提示）
+  Future<void> _toggleEpubBookmark() async {
+    if (_currentCfi.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('页面尚未准备就绪，无法记录书签'), duration: Duration(milliseconds: 1000)),
+      );
+      return;
+    }
+
+    final safeId = '${widget.bookId}_${DateTime.now().millisecondsSinceEpoch}';
+    final bookmark = Bookmark(
+      id: safeId,
+      bookId: widget.bookId,
+      title: '进度 ${(_currentProgress * 100).toStringAsFixed(1)}%',
+      snippet: 'EPUB 位置标注',
+      progressPercent: _currentProgress,
+      cfi: _currentCfi,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+
+    await BookmarkSyncService.saveBookmark(bookmark);
+    await _loadBookmarks();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已添加书签并同步'), duration: Duration(milliseconds: 1200)),
+      );
+    }
+  }
+
+  // 👈 5. 书签精准跳转（带安全转义）
+  void _jumpToEpubBookmark(Bookmark b) {
+    Navigator.pop(context);
+    if (b.cfi != null && b.cfi!.isNotEmpty) {
+      final safeCfi = b.cfi!
+          .replaceAll(r'\', r'\\')
+          .replaceAll("'", r"\'")
+          .replaceAll('"', r'\"');
+      _webViewController.runJavaScript("window.goToCfi('$safeCfi');");
+    }
   }
 
   Future<void> _initWebView() async {
@@ -403,7 +460,6 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     );
   }
 
-  /// 核心实现：3x3 九宫格热区触控引擎
   Widget _buildNineGridGestureLayer() {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -413,7 +469,6 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
         return GestureDetector(
           behavior: HitTestBehavior.translucent,
           onTapUp: (details) {
-            // 控制栏显示时，轻触屏幕任意区域仅收起控制栏
             if (_showControls) {
               setState(() => _showControls = false);
               return;
@@ -422,28 +477,22 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
             final dx = details.localPosition.dx;
             final dy = details.localPosition.dy;
 
-            // 计算所在的行和列 (0, 1, 2)
             final col = (dx / (totalWidth / 3)).clamp(0.0, 2.0).toInt();
             final row = (dy / (totalHeight / 3)).clamp(0.0, 2.0).toInt();
-
-            // 转化为 1 ~ 9 号区域
             final zone = row * 3 + col + 1;
 
-            // 区域 5：始终唤起控制菜单
             if (zone == 5) {
               setState(() => _showControls = true);
               return;
             }
 
             if (_handMode == HandMode.standard) {
-              // 常规手势：1、2、3、4 上一页；6、7、8、9 下一页
               if (zone >= 1 && zone <= 4) {
                 _prevPage();
               } else {
                 _nextPage();
               }
             } else {
-              // 单手模式：1、2 上一页；3、4、6、7、8、9 下一页
               if (zone == 1 || zone == 2) {
                 _prevPage();
               } else {
@@ -461,39 +510,21 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: const Color(0xFFF6EFE2),
-      drawer: Drawer(
-        child: Column(
-          children: [
-            DrawerHeader(
-              decoration: const BoxDecoration(color: Color(0xFF382E25)),
-              child: SizedBox(
-                width: double.infinity,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Text(
-                      widget.title,
-                      style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 8),
-                    const Text('目录', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                  ],
-                ),
+      // 👈 6. 替换为支持书签与目录切换的 ReaderDrawer
+      drawer: ReaderDrawer(
+        title: widget.title,
+        bookmarks: _bookmarks,
+        onBookmarkTap: _jumpToEpubBookmark,
+        onBookmarkDelete: (b) async {
+          await BookmarkSyncService.deleteBookmark(widget.bookId, b.id);
+          _loadBookmarks();
+        },
+        tocView: _toc.isEmpty
+            ? const Center(child: Text('暂无目录数据', style: TextStyle(color: Colors.grey)))
+            : ListView.builder(
+                itemCount: _toc.length,
+                itemBuilder: (context, index) => _buildTocItem(_toc[index]),
               ),
-            ),
-            Expanded(
-              child: _toc.isEmpty
-                  ? const Center(child: Text('暂无目录数据'))
-                  : ListView.builder(
-                      itemCount: _toc.length,
-                      itemBuilder: (context, index) => _buildTocItem(_toc[index]),
-                    ),
-            ),
-          ],
-        ),
       ),
       body: Stack(
         children: [
@@ -526,7 +557,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
               ),
             ),
 
-          // 顶部控制条
+          // 顶部控制条（已加入添加书签按钮）
           if (_showControls)
             Positioned(
               top: 0,
@@ -550,8 +581,13 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                         ),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.list, color: Colors.white),
-                        tooltip: '目录',
+                        icon: const Icon(Icons.bookmark_add_outlined, color: Colors.white),
+                        tooltip: '添加书签',
+                        onPressed: _toggleEpubBookmark,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.format_list_bulleted, color: Colors.white),
+                        tooltip: '目录与书签',
                         onPressed: () => _scaffoldKey.currentState?.openDrawer(),
                       ),
                     ],
@@ -593,7 +629,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                       ),
                       const Divider(color: Colors.white24, height: 16),
 
-                      // 手势模式切换（常规手势 / 单手模式）
+                      // 手势模式切换
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -615,7 +651,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                                     width: 1,
                                   ),
                                   labelStyle: TextStyle(
-                                    color: isSelected ? Colors.white : Colors.black87,
+                                    color: isSelected ? Colors.white : Colors.white70,
                                     fontSize: 11,
                                     fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                                   ),

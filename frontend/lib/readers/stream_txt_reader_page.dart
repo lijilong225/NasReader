@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:nas_reader/services/bookmark_sync_service.dart';
+import 'package:nas_reader/widgets/reader_drawer.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/full_txt_engine.dart';
@@ -10,6 +12,7 @@ import '../core/page_turn_view.dart';
 import '../widgets/typography_config.dart';
 import '../widgets/typography_settings_modal.dart';
 import '../services/app_logger.dart';
+import '../models/bookmark_model.dart';
 
 enum HandMode {
   standard('常规手势'),
@@ -47,6 +50,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   List<FullTxtPageSlice> _pages = [];
   List<FullTxtChapterItem> _toc = [];
   int _totalFileSize = 1;
+  List<Bookmark> _bookmarks = [];
 
   int _currentPageIndex = 0;
   int _currentChapterIndex = 0;
@@ -71,6 +75,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     super.initState();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadHandMode();
+    _loadBookmarks(); 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _paginateEntireBook();
     });
@@ -99,6 +104,64 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('txt_hand_mode', mode.name);
     } catch (_) {}
+  }
+
+  Future<void> _loadBookmarks() async {
+    final list = await BookmarkSyncService.syncWithServer(widget.bookId);
+    if (mounted) setState(() => _bookmarks = list);
+  }
+
+  // 添加当前页为书签
+  Future<void> _toggleBookmark() async {
+    if (_pages.isEmpty || _currentPageIndex >= _pages.length) return;
+    final slice = _pages[_currentPageIndex];
+    
+    final chapterTitle = _toc.isNotEmpty && _currentChapterIndex < _toc.length
+        ? _toc[_currentChapterIndex].title
+        : '第 ${_currentPageIndex + 1} 页';
+        
+    final snippet = slice.content.replaceAll('\n', ' ').trim();
+    final displaySnippet = snippet.length > 60 ? '${snippet.substring(0, 60)}...' : snippet;
+
+    final bookmark = Bookmark(
+      id: '${widget.bookId}_${slice.startByteOffset}',
+      bookId: widget.bookId,
+      title: chapterTitle,
+      snippet: displaySnippet,
+      progressPercent: (slice.endByteOffset / _totalFileSize).clamp(0.0, 1.0),
+      byteOffset: slice.startByteOffset,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+
+    await BookmarkSyncService.saveBookmark(bookmark);
+    await _loadBookmarks();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已添加书签并同步'), duration: Duration(milliseconds: 1200)),
+      );
+    }
+  }
+
+  // 点击书签跳转
+  void _jumpToBookmark(Bookmark b) {
+    Navigator.pop(context);
+    if (b.byteOffset == null || _pages.isEmpty) return;
+
+    for (int i = 0; i < _pages.length; i++) {
+      final isLast = (i == _pages.length - 1);
+      if (b.byteOffset! >= _pages[i].startByteOffset &&
+          (b.byteOffset! < _pages[i].endByteOffset || isLast)) {
+        setState(() {
+          _currentPageIndex = i;
+          _showControls = false;
+        });
+        _turnViewKey.currentState?.jumpToPage(i);
+        _saveCurrentProgress();
+        break;
+      }
+    }
   }
 
   Size _getContentSize() {
@@ -334,61 +397,42 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       child: Scaffold(
         key: _scaffoldKey,
         backgroundColor: _currentTheme.bgColor,
-        drawer: Drawer(
-          child: Column(
-            children: [
-              DrawerHeader(
-                decoration: const BoxDecoration(color: Color(0xFF382E25)),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      Text(
-                        widget.title,
-                        style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 8),
-                      Text('共 ${_toc.length} 章 · 全书 ${_pages.length} 页', style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                    ],
-                  ),
-                ),
-              ),
-              Expanded(
-                child: _toc.isEmpty
-                    ? const Center(child: Text('未识别到目录章节', style: TextStyle(color: Colors.grey)))
-                    : ListView.builder(
-                        itemCount: _toc.length,
-                        itemBuilder: (context, index) {
-                          final item = _toc[index];
-                          final isCurrent = index == _currentChapterIndex;
+        drawer: ReaderDrawer(
+          title: widget.title,
+          bookmarks: _bookmarks,
+          onBookmarkTap: _jumpToBookmark,
+          onBookmarkDelete: (b) async {
+            await BookmarkSyncService.deleteBookmark(widget.bookId, b.id);
+            _loadBookmarks();
+          },
+          tocView: _toc.isEmpty
+              ? const Center(child: Text('未识别到目录章节', style: TextStyle(color: Colors.grey)))
+              : ListView.builder(
+                  itemCount: _toc.length,
+                  itemBuilder: (context, index) {
+                    final item = _toc[index];
+                    final isCurrent = index == _currentChapterIndex;
 
-                          return ListTile(
-                            dense: true,
-                            title: Text(
-                              item.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                                color: isCurrent ? Colors.brown : Colors.black87,
-                              ),
-                            ),
-                            trailing: Text(
-                              'P.${item.pageIndex + 1}',
-                              style: const TextStyle(fontSize: 11, color: Colors.grey),
-                            ),
-                            onTap: () => _jumpToChapter(item),
-                          );
-                        },
+                    return ListTile(
+                      dense: true,
+                      title: Text(
+                        item.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                          color: isCurrent ? Colors.brown : Colors.black87,
+                        ),
                       ),
-              ),
-            ],
-          ),
+                      trailing: Text(
+                        'P.${item.pageIndex + 1}',
+                        style: const TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                      onTap: () => _jumpToChapter(item),
+                    );
+                  },
+                ),
         ),
         body: Stack(
           children: [
@@ -434,6 +478,11 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                             style: const TextStyle(color: Colors.white, fontSize: 16),
                             overflow: TextOverflow.ellipsis,
                           ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.bookmark_add_outlined, color: Colors.white),
+                          tooltip: '添加书签',
+                          onPressed: _toggleBookmark,
                         ),
                         IconButton(
                           icon: const Icon(Icons.format_list_bulleted, color: Colors.white),

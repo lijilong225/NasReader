@@ -10,12 +10,10 @@ import (
 )
 
 func main() {
-	// 初始化 SQLite 数据库
 	config.InitDB()
 
 	r := gin.Default()
 
-	// 允许跨域 (CORS) 中间件
 	r.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
@@ -42,19 +40,24 @@ func main() {
 		syncGroup := api.Group("/sync")
 		syncGroup.Use(middleware.AuthMiddleware())
 		{
+			// 1. 阅读进度同步
 			syncGroup.GET("/progress", handlers.GetAllProgress)
 			syncGroup.GET("/progress/:book_id", handlers.GetProgress)
 			syncGroup.POST("/progress", handlers.SyncProgress)
+
+			// 2. 书签双向同步 (新增)
+			syncGroup.GET("/bookmarks/:book_id", handlers.GetBookmarks)
+			syncGroup.POST("/bookmarks", handlers.SyncBookmarks)
+		}
+
+		// 文件系统相关接口
+		fileGroup := api.Group("/files")
+		fileGroup.Use(middleware.AuthMiddleware())
+		{
+			fileGroup.GET("/browse", handlers.BrowseDirectory)
+			fileGroup.GET("/download", handlers.DownloadFile)
 		}
 	}
-
-	// 在受保护的 API 路由组内增加文件相关接口
-	fileGroup := api.Group("/files")
-	fileGroup.Use(middleware.AuthMiddleware())
-	{
-    	fileGroup.GET("/browse", handlers.BrowseDirectory)
-    	fileGroup.GET("/download", handlers.DownloadFile)
-    }
 
 	log.Println("Reader Sync Server started on :8080")
 	if err := r.Run(":8080"); err != nil {

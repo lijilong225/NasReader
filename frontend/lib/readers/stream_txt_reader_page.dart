@@ -166,14 +166,14 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   Size _getContentSize() {
     final mq = MediaQuery.of(context);
     final availableWidth = mq.size.width - (kHorizontalPadding * 2);
-    // 减去安全区 + 垂直 Padding + 顶底信息条高度 + 间距
     final availableHeight = mq.size.height -
         mq.padding.top -
         mq.padding.bottom -
         (kVerticalPadding * 2) -
         kHeaderHeight -
         kFooterHeight -
-        kHeaderSpacing;
+        kHeaderSpacing -
+        16.0; // 👈 增加 16px 底部绝对安全间距
 
     return Size(
       availableWidth.clamp(100.0, 3000.0),
@@ -603,16 +603,24 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
             ),
             const SizedBox(height: kHeaderSpacing),
 
-            // 正文内容
+            // 正文内容（锁定行高与基线）
             Expanded(
-              child: Text(
-                slice.content,
-                style: TextStyle(
-                  fontSize: _typoConfig.fontSize,
-                  height: _typoConfig.lineHeight,
-                  letterSpacing: _typoConfig.letterSpacing,
-                  fontFamily: _typoConfig.customFontFamily ?? 'serif',
-                  color: _currentTheme.textColor,
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: Text(
+                  slice.content,
+                  strutStyle: StrutStyle(
+                    fontSize: _typoConfig.fontSize,
+                    height: _typoConfig.lineHeight,
+                    forceStrutHeight: true,
+                  ),
+                  style: TextStyle(
+                    fontSize: _typoConfig.fontSize,
+                    height: _typoConfig.lineHeight,
+                    letterSpacing: _typoConfig.letterSpacing,
+                    fontFamily: _typoConfig.customFontFamily ?? 'serif',
+                    color: _currentTheme.textColor,
+                  ),
                 ),
               ),
             ),

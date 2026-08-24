@@ -71,7 +71,7 @@ class ChunkedTxtEngine {
     }
   }
 
-  /// 2. 分页测算（主 UI 线程异步测算，避免原生 Isolate 缺少 Rendering Binding 导致静默崩溃）
+  /// 2. 分页测算（严格锁定整行高度，彻底避免最后一行被切掉半截）
   static Future<List<TxtPageSlice>> paginateChunkInIsolate({
     required File file,
     required TextChunkMeta chunk,
@@ -108,7 +108,19 @@ class ChunkedTxtEngine {
 
       final painter = TextPainter(textDirection: TextDirection.ltr);
 
-      // 二分折行测算单页容量
+      // 1. 基准字符单行真实渲染高度
+      final oneLinePainter = TextPainter(
+        text: TextSpan(text: '测', style: textStyle),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: contentSize.width);
+
+      final double singleLineHeight = oneLinePainter.height > 0 ? oneLinePainter.height : fontSize * lineHeight;
+
+      // 2. 将可用高度严格向下取整为完整行数的倍数（留 4px 容差缓冲）
+      final int maxLinesPossible = ((contentSize.height - 4) / singleLineHeight).floor();
+      final double safeMaxHeight = maxLinesPossible > 0 ? maxLinesPossible * singleLineHeight : contentSize.height;
+
+      // 3. 二分折行测算单页文字容量
       while (currentOffset < totalChars) {
         int step = 1500;
         int high = (currentOffset + step > totalChars) ? totalChars : currentOffset + step;
@@ -121,7 +133,7 @@ class ChunkedTxtEngine {
         );
         painter.layout(maxWidth: contentSize.width);
 
-        if (painter.height <= contentSize.height && high == totalChars) {
+        if (painter.height <= safeMaxHeight && high == totalChars) {
           bestFit = totalChars;
         } else {
           while (low <= high) {
@@ -132,7 +144,7 @@ class ChunkedTxtEngine {
             );
             painter.layout(maxWidth: contentSize.width);
 
-            if (painter.height <= contentSize.height) {
+            if (painter.height <= safeMaxHeight) {
               bestFit = mid;
               low = mid + 1;
             } else {

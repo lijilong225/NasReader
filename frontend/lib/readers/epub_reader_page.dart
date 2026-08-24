@@ -134,6 +134,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     }
 
     final safeId = '${widget.bookId}_${DateTime.now().millisecondsSinceEpoch}';
+    final now = DateTime.now().millisecondsSinceEpoch;
     final bookmark = Bookmark(
       id: safeId,
       bookId: widget.bookId,
@@ -141,8 +142,8 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
       snippet: 'EPUB 位置标注',
       progressPercent: _currentProgress,
       cfi: _currentCfi,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
+      createdAt: now,
+      updatedAt: now,
     );
 
     await BookmarkSyncService.saveBookmark(bookmark);

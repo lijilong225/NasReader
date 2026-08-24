@@ -122,6 +122,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         
     final snippet = slice.content.replaceAll('\n', ' ').trim();
     final displaySnippet = snippet.length > 60 ? '${snippet.substring(0, 60)}...' : snippet;
+    final now = DateTime.now().millisecondsSinceEpoch;
 
     final bookmark = Bookmark(
       id: '${widget.bookId}_${slice.startByteOffset}',
@@ -130,8 +131,8 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       snippet: displaySnippet,
       progressPercent: (slice.endByteOffset / _totalFileSize).clamp(0.0, 1.0),
       byteOffset: slice.startByteOffset,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
+      createdAt: now,
+      updatedAt: now,
     );
 
     await BookmarkSyncService.saveBookmark(bookmark);

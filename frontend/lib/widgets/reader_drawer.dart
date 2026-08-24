@@ -88,7 +88,9 @@ class _ReaderDrawerState extends State<ReaderDrawer> with SingleTickerProviderSt
 
   Widget _buildBookmarkList() {
     if (widget.bookmarks.isEmpty) {
-      return const Center(child: Text('暂无书签记录', style: TextStyle(color: Colors.grey, fontSize: 13)));
+      return const Center(
+        child: Text('暂无书签记录', style: TextStyle(color: Colors.grey, fontSize: 13)),
+      );
     }
 
     return ListView.separated(
@@ -96,6 +98,10 @@ class _ReaderDrawerState extends State<ReaderDrawer> with SingleTickerProviderSt
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (context, index) {
         final b = widget.bookmarks[index];
+        // 毫秒时间戳转本地 DateTime
+        final date = DateTime.fromMillisecondsSinceEpoch(b.createdAt);
+        final formattedTime = '${date.month}-${date.day} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+
         return Dismissible(
           key: ValueKey(b.id),
           direction: DismissDirection.endToStart,
@@ -126,7 +132,7 @@ class _ReaderDrawerState extends State<ReaderDrawer> with SingleTickerProviderSt
                   ),
                 const SizedBox(height: 2),
                 Text(
-                  '${(b.progressPercent * 100).toStringAsFixed(1)}% · ${b.createdAt.month}-${b.createdAt.day} ${b.createdAt.hour.toString().padLeft(2, '0')}:${b.createdAt.minute.toString().padLeft(2, '0')}',
+                  '${(b.progressPercent * 100).toStringAsFixed(1)}% · $formattedTime',
                   style: const TextStyle(fontSize: 10, color: Colors.grey),
                 ),
               ],

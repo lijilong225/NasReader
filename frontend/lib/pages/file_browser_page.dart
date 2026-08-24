@@ -5,7 +5,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../config/api_config.dart';
 import '../main.dart'; // 引入 NetworkClient
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';

@@ -43,6 +43,7 @@ class BookmarkSyncService {
     await prefs.setStringList(key, list.map((e) => jsonEncode(e.toJson())).toList());
     
     // 静默推送到后端
+    // ignore: body_might_complete_normally_catch_error
     syncWithServer(bookmark.bookId).catchError((e) {
       AppLogger.log('⚠️ 后端同步推迟: $e');
     });
@@ -62,6 +63,7 @@ class BookmarkSyncService {
         updatedAt: DateTime.now().millisecondsSinceEpoch,
       );
       await prefs.setStringList(key, list.map((e) => jsonEncode(e.toJson())).toList());
+      // ignore: body_might_complete_normally_catch_error
       syncWithServer(bookId).catchError((_) {});
     }
   }

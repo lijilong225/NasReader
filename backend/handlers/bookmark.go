@@ -82,3 +82,28 @@ func SyncBookmarks(c *gin.Context) {
 
 	c.JSON(http.StatusOK, mergedList)
 }
+
+// GetBookmarks 获取用户指定书籍的书签列表（排除已软删除的书签）
+func GetBookmarks(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未获取到用户身份"})
+		return
+	}
+
+	bookID := c.Param("book_id")
+	if bookID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 book_id 参数"})
+		return
+	}
+
+	var bookmarks []models.Bookmark
+	if err := config.DB.Where("user_id = ? AND book_id = ? AND is_deleted = ?", userID, bookID, false).
+		Order("created_at desc").
+		Find(&bookmarks).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取书签失败: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, bookmarks)
+}

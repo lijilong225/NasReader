@@ -46,7 +46,7 @@ class BookProgress {
 class ProgressSyncService {
   static const String _storageKey = 'local_reading_progress_map';
 
-  /// 1. 保存本地进度并静默上报给 NAS 远端
+  /// 1. 保存本地进度并上报给 NAS 远端
   static Future<void> updateProgress({
     required Dio? dio,
     required String bookId,
@@ -67,27 +67,27 @@ class ProgressSyncService {
       lastReadTime: now,
     );
 
-    // 存本地
+    // 写入本地存储
     final prefs = await SharedPreferences.getInstance();
     final rawMap = prefs.getString(_storageKey);
     Map<String, dynamic> map = rawMap != null ? jsonDecode(rawMap) : {};
     map[bookId] = item.toJson();
     await prefs.setString(_storageKey, jsonEncode(map));
 
-    // 异步推送到远端服务器
+    // 上报后端：POST /api/v1/sync/progress
     if (dio != null) {
       try {
-        await dio.post('/api/v1/progress/update', data: item.toJson());
+        await dio.post('/api/v1/sync/progress', data: item.toJson());
       } catch (e) {
         AppLogger.log('⚠️ 上报进度至远端失败: $e');
       }
     }
   }
 
-  /// 2. 从 NAS 远端拉取最新全量阅读进度并合并到本地
+  /// 2. 从 NAS 远端拉取最新全量阅读进度：GET /api/v1/sync/progress
   static Future<List<BookProgress>> syncWithRemote(Dio dio) async {
     try {
-      final res = await dio.get('/api/v1/progress/list');
+      final res = await dio.get('/api/v1/sync/progress');
       if (res.statusCode == 200 && res.data != null) {
         List<dynamic> remoteList = [];
         if (res.data is Map && res.data['data'] is List) {
@@ -104,7 +104,7 @@ class ProgressSyncService {
           final remoteItem = BookProgress.fromJson(Map<String, dynamic>.from(raw));
           if (remoteItem.bookId.isEmpty) continue;
 
-          // 依据最后阅读时间对比，保留最新记录
+          // 时间戳对比：保留最新进度
           if (localMap.containsKey(remoteItem.bookId)) {
             final localItem = BookProgress.fromJson(localMap[remoteItem.bookId]);
             if (remoteItem.lastReadTime > localItem.lastReadTime) {
@@ -117,6 +117,8 @@ class ProgressSyncService {
 
         await prefs.setString(_storageKey, jsonEncode(localMap));
       }
+    } on DioException catch (e) {
+      AppLogger.log('⚠️ 远端进度同步异常: ${e.message}');
     } catch (e) {
       AppLogger.log('⚠️ 远端进度同步异常: $e');
     }

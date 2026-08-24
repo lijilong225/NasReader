@@ -160,7 +160,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
       await _updateCachedFiles();
 
       final res = await widget.dio.get(
-        '/api/v1/files/list',
+        '/api/v1/files/browse',
         queryParameters: {'path': targetPath},
       );
 

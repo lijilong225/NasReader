@@ -1,6 +1,7 @@
 // lib/services/bookmark_sync_service.dart
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:nas_reader/config/api_config.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/bookmark_model.dart';
 import '../services/app_logger.dart';
@@ -12,7 +13,7 @@ class BookmarkSyncService {
   static Future<String> _getBaseUrl() async {
     final prefs = await SharedPreferences.getInstance();
     // 优先读取用户在设置中保存的 NAS 地址，默认回退到局域网地址
-    return prefs.getString('server_base_url') ?? 'http://192.168.1.100:8080';
+    return prefs.getString('server_base_url') ?? ApiConfig.baseUrl;
   }
 
   /// 获取本地保存的 JWT Token
@@ -81,7 +82,7 @@ class BookmarkSyncService {
       final token = await _getAuthToken();
 
       // 构建完整的 URL：http://host:port/api/v1/sync/bookmarks
-      final uri = Uri.parse('$baseUrl/api/v1/sync/bookmarks');
+      final uri = Uri.parse('${ApiConfig.baseUrl}/api/v1/sync/bookmarks');
 
       final headers = {
         'Content-Type': 'application/json',

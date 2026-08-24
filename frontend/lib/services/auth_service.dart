@@ -1,31 +1,18 @@
-import 'package:shared_preferences/shared_preferences.dart';
+// lib/services/auth_service.dart
+import '../config/api_config.dart';
 
 class AuthService {
-  static const String _tokenKey = 'auth_token';
-  static const String _baseUrlKey = 'auth_base_url';
+  static Future<String?> getBaseUrl() async => ApiConfig.baseUrl;
+  static Future<void> saveBaseUrl(String url) async => ApiConfig.setBaseUrl(url);
 
+  static Future<String?> getToken() async => ApiConfig.authToken;
   static Future<void> saveToken(String token) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_tokenKey, token);
+    // 兼容旧接口，直接写入 ApiConfig
+    await ApiConfig.onLoginSuccess(
+      token: token,
+      user: ApiConfig.currentUser ?? AuthUser(id: 1, username: 'User'),
+    );
   }
 
-  static Future<String?> getToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_tokenKey);
-  }
-
-  static Future<void> saveBaseUrl(String url) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_baseUrlKey, url);
-  }
-
-  static Future<String?> getBaseUrl() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_baseUrlKey);
-  }
-
-  static Future<void> clearAuth() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_tokenKey);
-  }
+  static Future<void> clearAuth() async => ApiConfig.onLogout();
 }

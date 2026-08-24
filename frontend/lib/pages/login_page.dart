@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
+import 'package:nas_reader/config/api_config.dart';
 
 import '../main.dart';
 import '../services/auth_service.dart';
@@ -16,8 +17,7 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   final _formKey = GlobalKey<FormState>();
-  final _serverController =
-      TextEditingController(text: serverHost);
+  final _serverController = TextEditingController(text: ApiConfig.baseUrl);
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
 
@@ -34,9 +34,9 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _loadSavedServerUrl() async {
     final savedUrl = await AuthService.getBaseUrl();
     if (savedUrl != null && savedUrl.isNotEmpty) {
-      _serverController.text = savedUrl; // 已做非空判断
+      _serverController.text = savedUrl;
     } else {
-      _serverController.text = 'http://192.168.5.3:6088';
+      _serverController.text = ApiConfig.baseUrl;
     }
   }
 
@@ -61,9 +61,12 @@ class _LoginPageState extends State<LoginPage> {
     final password = _passwordController.text;
 
     try {
+      // 1. 同步保存并更新全局 ApiConfig 的 BaseUrl
+      await ApiConfig.setBaseUrl(serverUrl);
+      await AuthService.saveBaseUrl(serverUrl);
+
       final dio = NetworkClient.getDio(baseUrl: serverUrl);
-      final path =
-          _isRegisterMode ? '/api/v1/auth/register' : '/api/v1/auth/login';
+      final path = _isRegisterMode ? '/api/v1/auth/register' : '/api/v1/auth/login';
 
       final response = await dio.post(
         path,
@@ -73,14 +76,35 @@ class _LoginPageState extends State<LoginPage> {
         },
       );
 
-      final token = response.data['token'] as String;
+      final data = response.data;
+      final token = (data['token'] ?? data['data']?['token'] ?? '') as String;
+      
+      // 2. 解析用户信息（安全类型转换，避免 as int 崩溃）
+      final rawUser = (data['user'] ?? data['data']?['user']) as Map<String, dynamic>?;
+      
+      // 安全提取 ID，兼容 int、double、String 等多种返回类型
+      int parsedId = 1;
+      final rawId = data['userId'] ?? data['user_id'] ?? data['id'];
+      if (rawId is num) {
+        parsedId = rawId.toInt();
+      } else if (rawId is String) {
+        parsedId = int.tryParse(rawId) ?? 1;
+      }
 
-      await AuthService.saveBaseUrl(serverUrl);
+      final user = rawUser != null
+          ? AuthUser.fromJson(rawUser)
+          : AuthUser(
+              id: parsedId, // 👈 使用安全解析后的 ID
+              username: username,
+            );
+
+      // 3. 核心：更新全局 ApiConfig 登录态与本地持久化
+      await ApiConfig.onLoginSuccess(token: token, user: user);
       await AuthService.saveToken(token);
 
       final authedDio = NetworkClient.getDio(baseUrl: serverUrl, token: token);
 
-      // 登录成功获取到 authedDio 后：
+      // 4. 登录成功后静默拉取远端全量阅读进度
       await ProgressSyncService.syncWithRemote(authedDio);
 
       if (!mounted) return;
@@ -96,7 +120,7 @@ class _LoginPageState extends State<LoginPage> {
       if (e.response != null && e.response?.data != null) {
         msg = e.response?.data['error'] ??
             e.response?.data['message'] ??
-            '请求失败';
+            '请求失败 (HTTP ${e.response?.statusCode})';
       }
       setState(() {
         _errorMessage = msg;
@@ -150,9 +174,9 @@ class _LoginPageState extends State<LoginPage> {
                     controller: _serverController,
                     decoration: InputDecoration(
                       labelText: '后端服务地址',
-                      hintText: serverHost,
-                      prefixIcon: Icon(Icons.dns_outlined),
-                      border: OutlineInputBorder(),
+                      hintText: ApiConfig.baseUrl,
+                      prefixIcon: const Icon(Icons.dns_outlined),
+                      border: const OutlineInputBorder(),
                     ),
                     validator: (v) =>
                         (v == null || v.isEmpty) ? '请输入服务器 URL' : null,
@@ -162,7 +186,7 @@ class _LoginPageState extends State<LoginPage> {
                   // 用户名
                   TextFormField(
                     controller: _usernameController,
-                    decoration: InputDecoration(
+                    decoration: const InputDecoration(
                       labelText: '用户名',
                       prefixIcon: Icon(Icons.person_outline),
                       border: OutlineInputBorder(),
@@ -176,7 +200,7 @@ class _LoginPageState extends State<LoginPage> {
                   TextFormField(
                     controller: _passwordController,
                     obscureText: true,
-                    decoration: InputDecoration(
+                    decoration: const InputDecoration(
                       labelText: '密码',
                       prefixIcon: Icon(Icons.lock_outline),
                       border: OutlineInputBorder(),

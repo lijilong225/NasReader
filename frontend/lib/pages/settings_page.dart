@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
+import 'package:nas_reader/config/api_config.dart';
+import 'package:nas_reader/services/auth_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -169,7 +171,7 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
     }
   }
 
-  // 退出登录逻辑：增加弹窗确认 + 清理凭证 + 路由重定向
+// 退出登录逻辑：增加弹窗确认 + 清理凭证 + 路由重定向
   Future<void> _handleLogout() async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -192,9 +194,15 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
     if (confirm != true) return;
 
     try {
+      // 1. 同步清理 ApiConfig 内存态、监听器与持久化 Token/用户信息
+      await ApiConfig.onLogout();
+
+      // 2. 清理 AuthService 中的存储标记
+      await AuthService.clearAuth();
+
+      // 3. 兜底清理 SharedPreferences 冗余历史 key
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('jwt_token');
-      await prefs.remove('auth_token');
       await prefs.remove('token');
       await prefs.remove('is_logged_in');
     } catch (e) {
@@ -203,7 +211,7 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
 
     if (!mounted) return;
 
-    // 清空整个路由栈，重定向到登录页
+    // 4. 清空路由栈，重定向到登录页
     Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 150),

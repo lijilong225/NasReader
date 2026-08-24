@@ -9,7 +9,7 @@
         android:label="NAS Reader"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:usesCleartextTraffic="true"> <!-- 允许内网直接使用 http://192.168.x.x 通信 -->
+        android:usesCleartextTraffic="true"> <!-- 允许内网直接使用 -->
 
         <activity
             android:name=".MainActivity"

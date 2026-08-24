@@ -5,6 +5,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../config/api_config.dart';
+import '../main.dart'; // 引入 NetworkClient
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
 import '../services/progress_sync_service.dart';
@@ -29,7 +31,7 @@ class NasFileItem {
   final bool isDir;
   final int size;
   final String? bookId;
-  final int modTime; // 毫秒时间戳
+  final int modTime;
 
   NasFileItem({
     required this.name,
@@ -63,9 +65,9 @@ class NasFileItem {
 }
 
 class FileBrowserPage extends StatefulWidget {
-  final Dio dio;
+  final Dio? dio; // 👈 优化为可选，内部自动从 NetworkClient / ApiConfig 回退
 
-  const FileBrowserPage({super.key, required this.dio});
+  const FileBrowserPage({super.key, this.dio});
 
   @override
   State<FileBrowserPage> createState() => FileBrowserPageState();
@@ -74,19 +76,20 @@ class FileBrowserPage extends StatefulWidget {
 class FileBrowserPageState extends State<FileBrowserPage> {
   static const String _sortPrefKey = 'nas_file_sort_type';
 
+  late Dio _dio;
   String _currentPath = '/';
   List<NasFileItem> _items = [];
   bool _isLoading = true;
   String? _errorMessage;
 
-  // 默认排序：按时间从新到旧
   FileSortType _currentSort = FileSortType.timeDesc;
-
   final Set<String> _cachedFileNames = {};
 
   @override
   void initState() {
     super.initState();
+    // 优先使用传入的 Dio，默认从 NetworkClient 获取（自动包含 ApiConfig.baseUrl 与 JWT Token）
+    _dio = widget.dio ?? NetworkClient.getDio();
     _initAndLoad();
   }
 
@@ -95,7 +98,6 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     await _loadDirectory(_currentPath);
   }
 
-  // 1. 读取上次持久化的排序规则
   Future<void> _loadSavedSortPreference() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -109,7 +111,6 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     } catch (_) {}
   }
 
-  // 2. 切换并持久化排序规则
   Future<void> _changeSort(FileSortType newSort) async {
     setState(() {
       _currentSort = newSort;
@@ -124,7 +125,6 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     }
   }
 
-  // 3. 排序执行逻辑（文件夹置顶）
   void _applySort() {
     _items.sort((a, b) {
       if (a.isDir && !b.isDir) return -1;
@@ -185,7 +185,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     try {
       await _updateCachedFiles();
 
-      final res = await widget.dio.get(
+      final res = await _dio.get(
         '/api/v1/files/browse',
         queryParameters: {'path': targetPath},
       );
@@ -326,7 +326,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     );
 
     try {
-      await widget.dio.download(
+      await _dio.download(
         '/api/v1/files/download',
         localFilePath,
         queryParameters: {'path': item.path},
@@ -379,6 +379,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     if (!mounted) return;
     final initialOffset = savedRecord.txtByteOffset ?? 0;
     final initialCfi = savedRecord.epubCfi;
+
     if (ext == '.txt') {
       Navigator.push(
         context,
@@ -391,7 +392,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
             initialByteOffset: initialOffset,
             onProgressChanged: (byteOffset, progress) {
               ProgressSyncService.updateProgress(
-                dio: widget.dio,
+                dio: _dio,
                 bookId: item.name,
                 title: p.basenameWithoutExtension(item.name),
                 filePath: item.path,
@@ -417,7 +418,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
             initialCfi: initialCfi,
             onProgressChanged: (cfi, progress) {
               ProgressSyncService.updateProgress(
-                dio: widget.dio,
+                dio: _dio,
                 bookId: item.name,
                 title: p.basenameWithoutExtension(item.name),
                 filePath: item.path,

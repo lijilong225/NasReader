@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../config/api_config.dart';
 import 'app_logger.dart';
 
 class BookProgress {
@@ -45,7 +47,9 @@ class BookProgress {
     final filePath = (json['file_path'] ?? json['FilePath'] ?? '').toString();
 
     final rawProgress = json['progress'] ?? json['Progress'] ?? 0.0;
-    final progress = (rawProgress is num) ? rawProgress.toDouble() : (double.tryParse(rawProgress.toString()) ?? 0.0);
+    final progress = (rawProgress is num)
+        ? rawProgress.toDouble()
+        : (double.tryParse(rawProgress.toString()) ?? 0.0);
 
     final locator = (json['locator'] ?? json['Locator'] ?? '').toString();
 
@@ -71,6 +75,20 @@ class ProgressSyncService {
   static const String _storageKey = 'local_reading_progress_map';
   static String? _cachedDeviceId;
 
+  /// 基于 ApiConfig 自动创建或配置 Dio 实例
+  static Dio _getDio([Dio? customDio]) {
+    if (customDio != null) return customDio;
+
+    return Dio(
+      BaseOptions(
+        baseUrl: ApiConfig.baseUrl,
+        connectTimeout: const Duration(seconds: 5),
+        receiveTimeout: const Duration(seconds: 5),
+        headers: ApiConfig.authHeaders,
+      ),
+    );
+  }
+
   static Future<String> _getDeviceId() async {
     if (_cachedDeviceId != null) return _cachedDeviceId!;
     final prefs = await SharedPreferences.getInstance();
@@ -83,9 +101,9 @@ class ProgressSyncService {
     return deviceId;
   }
 
-  /// 1. 保存本地并完整上报 NAS（携带 title & file_path）
+  /// 1. 保存本地并完整上报 NAS（Dio 可选，默认使用 ApiConfig 单例）
   static Future<void> updateProgress({
-    required Dio? dio,
+    Dio? dio,
     required String bookId,
     required String title,
     required String filePath,
@@ -110,38 +128,38 @@ class ProgressSyncService {
     await prefs.setString(_storageKey, jsonEncode(map));
 
     // 上报后端
-    if (dio != null) {
-      try {
-        final deviceId = await _getDeviceId();
-        final requestData = {
-          'book_id': bookId,
-          'title': title,
-          'file_path': filePath,
-          'progress': progressPercent.clamp(0.0, 1.0),
-          'locator': locator ?? '0',
-          'device_id': deviceId,
-          'device_name': Platform.operatingSystem,
-          'client_updated_at': now,
-        };
+    try {
+      final client = _getDio(dio);
+      final deviceId = await _getDeviceId();
+      final requestData = {
+        'book_id': bookId,
+        'title': title,
+        'file_path': filePath,
+        'progress': progressPercent.clamp(0.0, 1.0),
+        'locator': locator ?? '0',
+        'device_id': deviceId,
+        'device_name': Platform.operatingSystem,
+        'client_updated_at': now,
+      };
 
-        final res = await dio.post('/api/v1/sync/progress', data: requestData);
-        AppLogger.log('✅ 进度同步成功: $title -> ${(progressPercent * 100).toStringAsFixed(1)}% (HTTP ${res.statusCode})');
-      } on DioException catch (e) {
-        if (e.response?.statusCode == 409) {
-          AppLogger.log('ℹ️ 远端存在更新的阅读进度 (LWW)');
-        } else {
-          AppLogger.log('❌ 进度上报失败: ${e.response?.data ?? e.message}');
-        }
-      } catch (e) {
-        AppLogger.log('❌ 进度上报异常: $e');
+      final res = await client.post('/api/v1/sync/progress', data: requestData);
+      AppLogger.log('✅ 进度同步成功: $title -> ${(progressPercent * 100).toStringAsFixed(1)}% (HTTP ${res.statusCode})');
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 409) {
+        AppLogger.log('ℹ️ 远端存在更新的阅读进度 (LWW)');
+      } else {
+        AppLogger.log('❌ 进度上报失败: ${e.response?.data ?? e.message}');
       }
+    } catch (e) {
+      AppLogger.log('❌ 进度上报异常: $e');
     }
   }
 
-  /// 2. 冷启动/下拉刷新从 NAS 远端拉取全量记录
-  static Future<List<BookProgress>> syncWithRemote(Dio dio) async {
+  /// 2. 冷启动/下拉刷新从 NAS 远端拉取全量记录并与本地合并
+  static Future<List<BookProgress>> syncWithRemote([Dio? dio]) async {
     try {
-      final res = await dio.get('/api/v1/sync/progress');
+      final client = _getDio(dio);
+      final res = await client.get('/api/v1/sync/progress');
       AppLogger.log('📡 远端拉取进度响应: ${res.data}');
 
       if (res.statusCode == 200 && res.data != null) {
@@ -181,7 +199,17 @@ class ProgressSyncService {
     return getAllLocalProgress();
   }
 
-  /// 3. 获取本地所有阅读记录
+  /// 3. 获取单本书籍的本地阅读记录
+  static Future<BookProgress?> getLocalProgress(String bookId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final rawMap = prefs.getString(_storageKey);
+    if (rawMap == null) return null;
+    final map = jsonDecode(rawMap) as Map<String, dynamic>;
+    if (!map.containsKey(bookId)) return null;
+    return BookProgress.fromJson(map[bookId]);
+  }
+
+  /// 4. 获取本地所有阅读记录
   static Future<List<BookProgress>> getAllLocalProgress() async {
     final prefs = await SharedPreferences.getInstance();
     final rawMap = prefs.getString(_storageKey);

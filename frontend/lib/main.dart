@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:nas_reader/config/api_config.dart';
 
 // 引入本地书架与 NAS 文件浏览器页面
 import 'pages/login_page.dart';
@@ -10,10 +11,10 @@ import 'services/auth_service.dart';
 // 全局 Navigation Key，用于在 Dio 拦截器中触发 401 登出跳转
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 // main.dart 中初始化 Dio
-String serverHost = 'http://192.168.5.3:6088';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await ApiConfig.init();
   runApp(const MyApp());
 }
 
@@ -33,7 +34,9 @@ class MyApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const SplashPage(),
+      home: ApiConfig.isLoggedIn
+          ? MainNavigationContainer(dio: NetworkClient.getDio())
+          : const LoginPage(),
     );
   }
 }
@@ -42,28 +45,32 @@ class MyApp extends StatelessWidget {
 class NetworkClient {
   static Dio? _dioInstance;
 
-  /// 清洗 BaseUrl，确保末尾既没有多余的斜杠，也没有自带的 /api 前缀
+  /// 清洗 BaseUrl：去除协议外末尾的斜杠、/api、/api/v1 等多余前缀，避免路由重复拼装
   static String sanitizeBaseUrl(String? rawUrl) {
     if (rawUrl == null || rawUrl.trim().isEmpty) {
-      rawUrl = serverHost; // 回退到默认全局变量
+      rawUrl = ApiConfig.baseUrl; // 回退到全局配置
     }
     String cleaned = rawUrl.trim();
-    // 递归剔除结尾的 / 和 /api
-    cleaned = cleaned.replaceAll(RegExp(r'/api/?$'), '').replaceAll(RegExp(r'/$'), '');
+    // 递归剔除结尾的 /api/v1、/api 以及所有尾部斜杠
+    cleaned = cleaned
+        .replaceAll(RegExp(r'/api/v\d+/?$'), '')
+        .replaceAll(RegExp(r'/api/?$'), '')
+        .replaceAll(RegExp(r'/+$'), '');
     return cleaned;
   }
 
   /// 获取 Dio 单例
   static Dio getDio({String? baseUrl, String? token}) {
-    final cleanBaseUrl = sanitizeBaseUrl(baseUrl ?? _dioInstance?.options.baseUrl);
+    final targetBaseUrl = sanitizeBaseUrl(baseUrl ?? ApiConfig.baseUrl);
 
-    // 如果实例已存在且 baseUrl 没有发生改变，直接复用
-    if (_dioInstance != null && baseUrl == null && token == null) {
+    // 1. 如果单例已存在，且 baseUrl 没有变更，直接复用
+    if (_dioInstance != null && _dioInstance!.options.baseUrl == targetBaseUrl) {
       return _dioInstance!;
     }
 
+    // 2. 如果 baseUrl 变更或初次初始化，创建新的 Dio 实例
     final options = BaseOptions(
-      baseUrl: cleanBaseUrl,
+      baseUrl: targetBaseUrl,
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 15),
       contentType: 'application/json',
@@ -74,12 +81,13 @@ class NetworkClient {
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (reqOptions, handler) async {
-          // 打印完整请求地址供调试
-          AppLogger.log('🌐 [HTTP REQUEST] ${reqOptions.method} ${reqOptions.uri}');
-          final currentToken = token ?? await AuthService.getToken();
+          // 每次请求前动态获取最新的 Token（优先使用传入的 token，次选 ApiConfig/AuthService）
+          final currentToken = token ?? ApiConfig.authToken ?? await AuthService.getToken();
           if (currentToken != null && currentToken.isNotEmpty) {
             reqOptions.headers['Authorization'] = 'Bearer $currentToken';
           }
+
+          AppLogger.log('🌐 [HTTP REQUEST] ${reqOptions.method} ${reqOptions.uri}');
           return handler.next(reqOptions);
         },
         onResponse: (response, handler) {
@@ -88,9 +96,13 @@ class NetworkClient {
         },
         onError: (DioException error, handler) async {
           AppLogger.log('❌ [HTTP ERROR ${error.response?.statusCode}] -> ${error.requestOptions.uri}');
-          // 401 鉴权失效：清除本地凭证并切回登录页
+
+          // 401 鉴权失效：重置网络单例、清理本地凭证并切回登录页
           if (error.response?.statusCode == 401) {
+            reset();
+            await ApiConfig.onLogout();
             await AuthService.clearAuth();
+
             navigatorKey.currentState?.pushAndRemoveUntil(
               MaterialPageRoute(builder: (context) => const LoginPage()),
               (route) => false,
@@ -107,6 +119,7 @@ class NetworkClient {
 
   /// 退出登录或切换服务器时，主动重置 Dio 实例
   static void reset() {
+    _dioInstance?.close(force: true);
     _dioInstance = null;
   }
 }

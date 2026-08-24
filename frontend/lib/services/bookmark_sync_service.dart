@@ -76,7 +76,6 @@ class BookmarkSyncService {
     try {
       final token = await _getAuthToken();
 
-      // 构建完整的 URL：http://host:port/api/v1/sync/bookmarks
       final uri = Uri.parse('${ApiConfig.baseUrl}/api/v1/sync/bookmarks');
 
       final headers = {

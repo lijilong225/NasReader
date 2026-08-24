@@ -57,11 +57,11 @@ class ApiConfig {
   static final ValueNotifier<bool> isLoggedInNotifier = ValueNotifier<bool>(false);
 
   static String get _defaultBaseUrl {
-    if (kIsWeb) return 'http://localhost:8080';
+    if (kIsWeb) return 'http://nas:6088';
     if (Platform.isAndroid) {
-      return 'http://10.0.2.2:8080';
+      return 'http://nas:6088';
     }
-    return 'http://127.0.0.1:8080';
+    return 'http://nas:6088';
   }
 
   // 基础访问器

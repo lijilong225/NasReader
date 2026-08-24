@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 
-/// 分块元数据
 class TextChunkMeta {
   final int index;
   final int startByte;
@@ -17,7 +16,6 @@ class TextChunkMeta {
   });
 }
 
-/// 分页切片结果
 class TxtPageSlice {
   final int globalPageIndex;
   final int startByteOffset;
@@ -45,7 +43,7 @@ class ChunkedTxtEngine {
   int get totalFileSize => _totalFileSize;
   List<TextChunkMeta> get chunks => _chunks;
 
-  /// 1. 快速构建物理分块索引
+  /// 快速构建物理分块索引（微秒级）
   Future<void> buildIndex() async {
     if (!await file.exists()) return;
     _totalFileSize = await file.length();
@@ -71,7 +69,7 @@ class ChunkedTxtEngine {
     }
   }
 
-  /// 2. 分页测算（严格锁定整行高度，彻底避免最后一行被切掉半截）
+  /// 极速排版测算：基于估算字符数快速收敛二分区间
   static Future<List<TxtPageSlice>> paginateChunkInIsolate({
     required File file,
     required TextChunkMeta chunk,
@@ -86,7 +84,6 @@ class ChunkedTxtEngine {
       final buffer = await raf.read(chunk.endByte - chunk.startByte);
       await raf.close();
 
-      // 安全多编码容错解码
       String chunkText;
       try {
         chunkText = utf8.decode(buffer, allowMalformed: true);
@@ -108,23 +105,28 @@ class ChunkedTxtEngine {
 
       final painter = TextPainter(textDirection: TextDirection.ltr);
 
-      // 1. 基准字符单行真实渲染高度
+      // 1. 基准字符测算单行高度与每行估计容纳字数
       final oneLinePainter = TextPainter(
         text: TextSpan(text: '测', style: textStyle),
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: contentSize.width);
 
       final double singleLineHeight = oneLinePainter.height > 0 ? oneLinePainter.height : fontSize * lineHeight;
-
-      // 2. 将可用高度严格向下取整为完整行数的倍数（留 4px 容差缓冲）
       final int maxLinesPossible = ((contentSize.height - 4) / singleLineHeight).floor();
       final double safeMaxHeight = maxLinesPossible > 0 ? maxLinesPossible * singleLineHeight : contentSize.height;
 
-      // 3. 二分折行测算单页文字容量
+      // 每页估算字数（宽/字号 * 行数 * 0.8 换行容错）
+      final int charsPerLine = (contentSize.width / (fontSize + letterSpacing)).floor();
+      final int estimatedCharsPerPage = ((charsPerLine * maxLinesPossible) * 0.9).toInt().clamp(100, 1500);
+
+      // 2. 启发式二分折行
       while (currentOffset < totalChars) {
-        int step = 1500;
-        int high = (currentOffset + step > totalChars) ? totalChars : currentOffset + step;
-        int low = currentOffset + 1;
+        int low = currentOffset + (estimatedCharsPerPage * 0.6).toInt();
+        if (low >= totalChars) low = currentOffset + 1;
+        
+        int high = currentOffset + (estimatedCharsPerPage * 1.4).toInt();
+        if (high > totalChars) high = totalChars;
+
         int bestFit = low;
 
         painter.text = TextSpan(
@@ -136,6 +138,7 @@ class ChunkedTxtEngine {
         if (painter.height <= safeMaxHeight && high == totalChars) {
           bestFit = totalChars;
         } else {
+          // 二分收敛
           while (low <= high) {
             int mid = (low + high) ~/ 2;
             painter.text = TextSpan(
@@ -169,7 +172,7 @@ class ChunkedTxtEngine {
 
       return slices;
     } catch (e) {
-      debugPrint('分页排版测算失败: $e');
+      debugPrint('排版测算失败: $e');
       return [];
     }
   }

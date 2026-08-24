@@ -96,6 +96,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         return;
       }
 
+      // 1. 物理索引秒建
       await _engine.buildIndex();
 
       if (_engine.chunks.isEmpty) {
@@ -106,7 +107,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         return;
       }
 
-      // 1. 查找 initialByteOffset 落在哪个分块
+      // 2. 定位目标分块
       int targetChunk = 0;
       for (int i = 0; i < _engine.chunks.length; i++) {
         if (_currentSavedOffset >= _engine.chunks[i].startByte &&
@@ -118,25 +119,32 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
       _currentChunkIndex = targetChunk;
 
+      // 3. 立即准备渲染首屏，解除全局 Loading 状态
       if (mounted) {
         setState(() => _isIndexing = false);
       }
 
-      // 2. 渲染首屏并定位到目标页
+      // 4. 第一帧后加载当前块
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
+        
+        // 加载当前分块并定位
         await _loadChunkPages(targetChunk, targetByteOffset: _currentSavedOffset);
-        _preloadAdjacentChunks(targetChunk);
 
-        // 异步提取目录
-        TxtTocExtractor.extractTocInIsolate(widget.file).then((tocList) {
-          if (mounted) {
-            setState(() {
-              _toc = tocList;
-              _updateCurrentChapter(_currentSavedOffset);
-            });
-          }
-        }).catchError((_) {});
+        // 5. 延迟 200ms 执行后台预加载和目录扫描，绝不抢占首屏 CPU
+        Future.delayed(const Duration(milliseconds: 200), () {
+          if (!mounted) return;
+          _preloadAdjacentChunks(targetChunk);
+
+          TxtTocExtractor.extractTocInIsolate(widget.file).then((tocList) {
+            if (mounted) {
+              setState(() {
+                _toc = tocList;
+                _updateCurrentChapter(_currentSavedOffset);
+              });
+            }
+          }).catchError((_) {});
+        });
       });
     } catch (e, stack) {
       AppLogger.log('❌ TXT 初始化异常: $e\n$stack');

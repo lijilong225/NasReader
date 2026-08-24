@@ -376,16 +376,18 @@ class FileBrowserPageState extends State<FileBrowserPage> {
 
     final ext = p.extension(item.name).toLowerCase();
     if (!mounted) return;
-
+    final initialOffset = savedRecord.txtByteOffset ?? 0;
+    final initialCfi = savedRecord.epubCfi;
     if (ext == '.txt') {
       Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => StreamTxtReaderPage(
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 120),
+          pageBuilder: (context, animation, secondaryAnimation) => StreamTxtReaderPage(
             bookId: item.name,
             file: file,
             title: p.basenameWithoutExtension(item.name),
-            initialByteOffset: savedRecord.txtByteOffset ?? 0,
+            initialByteOffset: initialOffset,
             onProgressChanged: (byteOffset, progress) {
               ProgressSyncService.updateProgress(
                 dio: widget.dio,
@@ -397,17 +399,21 @@ class FileBrowserPageState extends State<FileBrowserPage> {
               );
             },
           ),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return FadeTransition(opacity: animation, child: child);
+          },
         ),
       ).then((_) => _updateCachedFiles());
     } else if (ext == '.epub') {
       Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => EpubReaderPage(
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 120),
+          pageBuilder: (context, animation, secondaryAnimation) => EpubReaderPage(
             bookId: item.name,
             file: file,
             title: p.basenameWithoutExtension(item.name),
-            initialCfi: savedRecord.epubCfi,
+            initialCfi: initialCfi,
             onProgressChanged: (cfi, progress) {
               ProgressSyncService.updateProgress(
                 dio: widget.dio,
@@ -419,9 +425,12 @@ class FileBrowserPageState extends State<FileBrowserPage> {
               );
             },
           ),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return FadeTransition(opacity: animation, child: child);
+          },
         ),
       ).then((_) => _updateCachedFiles());
-    }
+    }  
   }
 
   String _formatSize(int bytes) {

@@ -180,16 +180,19 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
     }
 
     if (!mounted) return;
+    final initialOffset = book.txtByteOffset ?? 0;
+    final initialCfi = book.epubCfi;
 
     if (book.extension == '.txt') {
       Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => StreamTxtReaderPage(
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 120),
+          pageBuilder: (context, animation, secondaryAnimation) => StreamTxtReaderPage(
             bookId: book.bookId,
             file: targetFile,
             title: book.title,
-            initialByteOffset: book.txtByteOffset ?? 0,
+            initialByteOffset: initialOffset,
             onProgressChanged: (byteOffset, progress) {
               ProgressSyncService.updateProgress(
                 dio: widget.dio,
@@ -201,17 +204,21 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
               );
             },
           ),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return FadeTransition(opacity: animation, child: child);
+          },
         ),
       ).then((_) => loadLocalBooks());
     } else if (book.extension == '.epub') {
       Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => EpubReaderPage(
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 120),
+          pageBuilder: (context, animation, secondaryAnimation) => EpubReaderPage(
             bookId: book.bookId,
             file: targetFile,
             title: book.title,
-            initialCfi: book.epubCfi,
+            initialCfi: initialCfi,
             onProgressChanged: (cfi, progress) {
               ProgressSyncService.updateProgress(
                 dio: widget.dio,
@@ -223,6 +230,9 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
               );
             },
           ),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return FadeTransition(opacity: animation, child: child);
+          },
         ),
       ).then((_) => loadLocalBooks());
     }

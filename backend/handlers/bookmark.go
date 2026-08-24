@@ -10,9 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// SyncBookmarks 双向合并同步用户指定书籍的书签
 func SyncBookmarks(c *gin.Context) {
-	// 统一从上下文读取 string 类型的 user_id
 	userID := c.GetString("user_id")
 	if userID == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "未获取到用户身份"})
@@ -27,7 +25,6 @@ func SyncBookmarks(c *gin.Context) {
 
 	db := config.DB
 
-	// 开启事务处理比对
 	err := db.Transaction(func(tx *gorm.DB) error {
 		var serverBookmarks []models.Bookmark
 		if err := tx.Where("user_id = ? AND book_id = ?", userID, req.BookID).Find(&serverBookmarks).Error; err != nil {
@@ -45,13 +42,12 @@ func SyncBookmarks(c *gin.Context) {
 
 			serverB, exist := serverMap[clientB.ID]
 			if !exist {
-				// 服务端无记录：直接插入
 				if err := tx.Create(&clientB).Error; err != nil {
 					return err
 				}
 			} else {
-				// 服务端存在：客户端较新时更新
-				if clientB.UpdatedAt.After(serverB.UpdatedAt) {
+				// 直接基于毫秒数值大小进行 LWW 判定
+				if clientB.UpdatedAt > serverB.UpdatedAt {
 					if err := tx.Model(&models.Bookmark{}).
 						Where("id = ? AND user_id = ?", clientB.ID, userID).
 						Updates(map[string]interface{}{
@@ -76,7 +72,6 @@ func SyncBookmarks(c *gin.Context) {
 		return
 	}
 
-	// 返回该用户该书籍的所有最新书签
 	var mergedList []models.Bookmark
 	if err := db.Where("user_id = ? AND book_id = ?", userID, req.BookID).
 		Order("created_at desc").
@@ -86,25 +81,4 @@ func SyncBookmarks(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, mergedList)
-}
-
-// GetBookmarks 获取指定书籍的书签列表
-func GetBookmarks(c *gin.Context) {
-	userID := c.GetString("user_id")
-	if userID == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "未获取到用户身份"})
-		return
-	}
-
-	bookID := c.Param("book_id")
-
-	var bookmarks []models.Bookmark
-	if err := config.DB.Where("user_id = ? AND book_id = ? AND is_deleted = false", userID, bookID).
-		Order("created_at desc").
-		Find(&bookmarks).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, bookmarks)
 }

@@ -1,15 +1,14 @@
-// lib/models/bookmark_model.dart
 class Bookmark {
   final String id;
   final String bookId;
-  final String title;          // 章节名或书签名
-  final String snippet;        // 正文摘录（前50字）
-  final double progressPercent;// 进度 0.0 ~ 1.0
-  final int? byteOffset;       // TXT 专用定位
-  final String? cfi;           // EPUB 专用定位
-  final DateTime createdAt;
-  final DateTime updatedAt;
-  final bool isDeleted;        // 软删除标记，用于支持跨端同步删除
+  final String title;
+  final String snippet;
+  final double progressPercent;
+  final int? byteOffset;
+  final String? cfi;
+  final int createdAt; // 毫秒时间戳
+  final int updatedAt; // 毫秒时间戳
+  final bool isDeleted;
 
   Bookmark({
     required this.id,
@@ -24,6 +23,29 @@ class Bookmark {
     this.isDeleted = false,
   });
 
+  Bookmark copyWith({
+    String? title,
+    String? snippet,
+    double? progressPercent,
+    int? byteOffset,
+    String? cfi,
+    int? updatedAt,
+    bool? isDeleted,
+  }) {
+    return Bookmark(
+      id: id,
+      bookId: bookId,
+      title: title ?? this.title,
+      snippet: snippet ?? this.snippet,
+      progressPercent: progressPercent ?? this.progressPercent,
+      byteOffset: byteOffset ?? this.byteOffset,
+      cfi: cfi ?? this.cfi,
+      createdAt: createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      isDeleted: isDeleted ?? this.isDeleted,
+    );
+  }
+
   Map<String, dynamic> toJson() => {
     'id': id,
     'bookId': bookId,
@@ -32,39 +54,35 @@ class Bookmark {
     'progressPercent': progressPercent,
     'byteOffset': byteOffset,
     'cfi': cfi,
-    'createdAt': createdAt.toIso8601String(),
-    'updatedAt': updatedAt.toIso8601String(),
+    'createdAt': createdAt,
+    'updatedAt': updatedAt,
     'isDeleted': isDeleted,
   };
 
-  factory Bookmark.fromJson(Map<String, dynamic> json) => Bookmark(
-    id: json['id'] as String,
-    bookId: json['bookId'] as String,
-    title: json['title'] as String? ?? '未命名书签',
-    snippet: json['snippet'] as String? ?? '',
-    progressPercent: (json['progressPercent'] as num?)?.toDouble() ?? 0.0,
-    byteOffset: json['byteOffset'] as int?,
-    cfi: json['cfi'] as String?,
-    createdAt: DateTime.tryParse(json['createdAt'] ?? '') ?? DateTime.now(),
-    updatedAt: DateTime.tryParse(json['updatedAt'] ?? '') ?? DateTime.now(),
-    isDeleted: json['isDeleted'] as bool? ?? false,
-  );
+  factory Bookmark.fromJson(Map<String, dynamic> json) {
+    // 兼容可能存在的旧 ISO 字符串或数字类型
+    int parseTimestamp(dynamic val) {
+      if (val is num) return val.toInt();
+      if (val is String) {
+        final parsedNum = int.tryParse(val);
+        if (parsedNum != null) return parsedNum;
+        final date = DateTime.tryParse(val);
+        if (date != null) return date.millisecondsSinceEpoch;
+      }
+      return DateTime.now().millisecondsSinceEpoch;
+    }
 
-  Bookmark copyWith({
-    String? title,
-    String? snippet,
-    DateTime? updatedAt,
-    bool? isDeleted,
-  }) => Bookmark(
-    id: id,
-    bookId: bookId,
-    title: title ?? this.title,
-    snippet: snippet ?? this.snippet,
-    progressPercent: progressPercent,
-    byteOffset: byteOffset,
-    cfi: cfi,
-    createdAt: createdAt,
-    updatedAt: updatedAt ?? this.updatedAt,
-    isDeleted: isDeleted ?? this.isDeleted,
-  );
+    return Bookmark(
+      id: json['id']?.toString() ?? '',
+      bookId: json['bookId']?.toString() ?? '',
+      title: json['title']?.toString() ?? '',
+      snippet: json['snippet']?.toString() ?? '',
+      progressPercent: (json['progressPercent'] as num?)?.toDouble() ?? 0.0,
+      byteOffset: (json['byteOffset'] as num?)?.toInt(),
+      cfi: json['cfi']?.toString(),
+      createdAt: parseTimestamp(json['createdAt']),
+      updatedAt: parseTimestamp(json['updatedAt']),
+      isDeleted: json['isDeleted'] == true,
+    );
+  }
 }

@@ -9,13 +9,6 @@ import '../services/app_logger.dart';
 class BookmarkSyncService {
   static const String _localPrefix = 'local_bookmarks_';
 
-  /// 获取服务器基础地址（可从配置或本地存储读取，支持动态配置）
-  static Future<String> _getBaseUrl() async {
-    final prefs = await SharedPreferences.getInstance();
-    // 优先读取用户在设置中保存的 NAS 地址，默认回退到局域网地址
-    return prefs.getString('server_base_url') ?? ApiConfig.baseUrl;
-  }
-
   /// 获取本地保存的 JWT Token
   static Future<String?> _getAuthToken() async {
     final prefs = await SharedPreferences.getInstance();
@@ -55,7 +48,7 @@ class BookmarkSyncService {
     });
   }
 
-  /// 软删除书签
+// 删除时更新为当前毫秒时间戳
   static Future<void> deleteBookmark(String bookId, String bookmarkId) async {
     final prefs = await SharedPreferences.getInstance();
     final key = '$_localPrefix$bookId';
@@ -64,7 +57,10 @@ class BookmarkSyncService {
     final list = rawList.map((e) => Bookmark.fromJson(jsonDecode(e))).toList();
     final idx = list.indexWhere((b) => b.id == bookmarkId);
     if (idx >= 0) {
-      list[idx] = list[idx].copyWith(isDeleted: true, updatedAt: DateTime.now());
+      list[idx] = list[idx].copyWith(
+        isDeleted: true,
+        updatedAt: DateTime.now().millisecondsSinceEpoch,
+      );
       await prefs.setStringList(key, list.map((e) => jsonEncode(e.toJson())).toList());
       syncWithServer(bookId).catchError((_) {});
     }
@@ -78,7 +74,6 @@ class BookmarkSyncService {
     final localList = rawList.map((e) => Bookmark.fromJson(jsonDecode(e))).toList();
 
     try {
-      final baseUrl = await _getBaseUrl();
       final token = await _getAuthToken();
 
       // 构建完整的 URL：http://host:port/api/v1/sync/bookmarks
@@ -108,8 +103,9 @@ class BookmarkSyncService {
         for (final b in localList) {
           mergedMap[b.id] = b;
         }
+        // 合并时比对大小
         for (final sb in serverList) {
-          if (!mergedMap.containsKey(sb.id) || sb.updatedAt.isAfter(mergedMap[sb.id]!.updatedAt)) {
+          if (!mergedMap.containsKey(sb.id) || sb.updatedAt > mergedMap[sb.id]!.updatedAt) {
             mergedMap[sb.id] = sb;
           }
         }

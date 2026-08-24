@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 
@@ -8,13 +7,15 @@ class FullTxtPageSlice {
   final int pageIndex;
   final int startByteOffset;
   final int endByteOffset;
-  final String content;
+  final String content;        // 仅包含正文（已剥离章节标题）
+  final String? chapterTitle;  // 章节起始页的标题
 
   const FullTxtPageSlice({
     required this.pageIndex,
     required this.startByteOffset,
     required this.endByteOffset,
     required this.content,
+    this.chapterTitle,
   });
 }
 
@@ -50,7 +51,7 @@ class FullTxtPaginationParams {
   final double fontSize;
   final double lineHeight;
   final double letterSpacing;
-  final String? fontFamily;
+  final bool indentFirstLine;
 
   const FullTxtPaginationParams({
     required this.filePath,
@@ -58,152 +59,17 @@ class FullTxtPaginationParams {
     required this.fontSize,
     required this.lineHeight,
     required this.letterSpacing,
-    this.fontFamily,
-  });
-}
-
-class _PreparseResult {
-  final String text;
-  final List<MapEntry<int, String>> chapterPositions;
-  final int totalBytes;
-
-  _PreparseResult({
-    required this.text,
-    required this.chapterPositions,
-    required this.totalBytes,
+    this.indentFirstLine = true,
   });
 }
 
 class FullTxtEngine {
-  static Future<FullTxtPaginationResult> paginate(FullTxtPaginationParams params) async {
-    // 1. 在 Isolate 中完成文件解码与章节正则提取
-    final preparse = await compute(_preparseWorker, params.filePath);
-
-    final text = preparse.text;
-    final chapterPositions = preparse.chapterPositions;
-    final totalBytes = preparse.totalBytes;
-
-    if (text.isEmpty) {
-      return FullTxtPaginationResult(pages: [], chapters: [], totalBytes: 0);
-    }
-
-    final textStyle = TextStyle(
-      fontSize: params.fontSize,
-      height: params.lineHeight,
-      letterSpacing: params.letterSpacing,
-      fontFamily: params.fontFamily ?? 'serif',
-    );
-    final strutStyle = StrutStyle(
-      fontSize: params.fontSize,
-      height: params.lineHeight,
-      forceStrutHeight: true,
-    );
-
-    final textPainter = TextPainter(
-      textDirection: TextDirection.ltr,
-      strutStyle: strutStyle,
-      maxLines: null,
-    );
-
-    final pages = <FullTxtPageSlice>[];
-    final chapters = <FullTxtChapterItem>[];
-
-    int startChar = 0;
-    int pageIdx = 0;
-    int currentByteOffset = 0;
-    int chapterCursor = 0;
-    int chapterIndexCount = 0;
-
-    final targetWidth = params.contentSize.width;
-    final targetHeight = params.contentSize.height;
-
-    // 单页字符估算窗口大小（避免每次排版把整本几百万字传给 TextPainter）
-    const int estimatedWindow = 1200;
-
-    while (startChar < text.length) {
-      // 检查当前字符位置是否命中章节
-      while (chapterCursor < chapterPositions.length &&
-          chapterPositions[chapterCursor].key <= startChar) {
-        chapters.add(FullTxtChapterItem(
-          index: chapterIndexCount++,
-          title: chapterPositions[chapterCursor].value,
-          startByteOffset: currentByteOffset,
-          pageIndex: pageIdx,
-        ));
-        chapterCursor++;
-      }
-
-      // 仅截取当前窗口范围排版
-      int windowEnd = min(startChar + estimatedWindow, text.length);
-      String windowText = text.substring(startChar, windowEnd);
-
-      textPainter.text = TextSpan(text: windowText, style: textStyle);
-      textPainter.layout(maxWidth: targetWidth);
-
-      int endChar;
-      if (textPainter.size.height <= targetHeight) {
-        // 如果当前窗口文字高度还小于一页，且还没到末尾，扩展窗口直到溢出
-        if (windowEnd == text.length) {
-          endChar = text.length;
-        } else {
-          // 放大窗口
-          int extendedEnd = min(startChar + estimatedWindow * 2, text.length);
-          windowText = text.substring(startChar, extendedEnd);
-          textPainter.text = TextSpan(text: windowText, style: textStyle);
-          textPainter.layout(maxWidth: targetWidth);
-
-          if (textPainter.size.height <= targetHeight) {
-            endChar = extendedEnd;
-          } else {
-            final position = textPainter.getPositionForOffset(Offset(targetWidth, targetHeight));
-            int fitLength = position.offset;
-            if (fitLength <= 0) fitLength = 1;
-            endChar = startChar + fitLength;
-          }
-        }
-      } else {
-        // 窗口文本已超出一页，精准获取该高度下的字符切点
-        final position = textPainter.getPositionForOffset(Offset(targetWidth, targetHeight));
-        int fitLength = position.offset;
-        if (fitLength <= 0) fitLength = 1;
-        endChar = startChar + fitLength;
-      }
-
-      // 强校验：确保每次循环至少前进一步，彻底消除死循环
-      if (endChar <= startChar) {
-        endChar = startChar + 1;
-      }
-
-      final pageContent = text.substring(startChar, endChar);
-      final pageByteLength = utf8.encode(pageContent).length;
-      final endByteOffset = currentByteOffset + pageByteLength;
-
-      pages.add(FullTxtPageSlice(
-        pageIndex: pageIdx,
-        startByteOffset: currentByteOffset,
-        endByteOffset: endByteOffset,
-        content: pageContent,
-      ));
-
-      startChar = endChar;
-      currentByteOffset = endByteOffset;
-      pageIdx++;
-
-      // 每排版 150 页主动让出微任务，避免主线程掉帧卡顿
-      if (pageIdx % 150 == 0) {
-        await Future.delayed(Duration.zero);
-      }
-    }
-
-    return FullTxtPaginationResult(
-      pages: pages,
-      chapters: chapters,
-      totalBytes: totalBytes,
-    );
+  static Future<FullTxtPaginationResult> paginate(FullTxtPaginationParams params) {
+    return compute(_fastPaginateWorker, params);
   }
 
-  static _PreparseResult _preparseWorker(String filePath) {
-    final file = File(filePath);
+  static FullTxtPaginationResult _fastPaginateWorker(FullTxtPaginationParams params) {
+    final file = File(params.filePath);
     final bytes = file.readAsBytesSync();
     final totalBytes = bytes.length;
 
@@ -218,6 +84,11 @@ class FullTxtEngine {
       }
     }
 
+    if (text.isEmpty) {
+      return const FullTxtPaginationResult(pages: [], chapters: [], totalBytes: 0);
+    }
+
+    // 目录正则
     final chapterRegex = RegExp(
       r'^\s*(第[0-9一二三四五六七八九十百千万]+[章回节卷集幕篇部]|Chapter\s*\d+|Section\s*\d+)(.*)$',
       multiLine: true,
@@ -229,9 +100,144 @@ class FullTxtEngine {
       chapterPositions.add(MapEntry(m.start, m.group(0)?.trim() ?? '未知章节'));
     }
 
-    return _PreparseResult(
-      text: text,
-      chapterPositions: chapterPositions,
+    final charWidth = params.fontSize + params.letterSpacing;
+    final rowHeight = params.fontSize * params.lineHeight;
+
+    final charsPerLine = (params.contentSize.width / charWidth).floor().clamp(10, 100);
+    final linesPerPage = (params.contentSize.height / rowHeight).floor().clamp(5, 60);
+
+    final pages = <FullTxtPageSlice>[];
+    final chapters = <FullTxtChapterItem>[];
+
+    final lines = text.split('\n');
+    final pageBuffer = StringBuffer();
+
+    int pageIdx = 0;
+    int currentLinesOnPage = 0;
+    int currentByteOffset = 0;
+    int currentCharIndex = 0;
+    int chapterCursor = 0;
+    int chapterCount = 0;
+    int pageStartByte = 0;
+    String? currentPendingChapterTitle;
+
+    for (int i = 0; i < lines.length; i++) {
+      var rawLine = lines[i];
+      final lineCharLengthWithBreak = rawLine.length + 1;
+
+      // 判断当前行是否命中新章节
+      bool isNewChapter = false;
+      String? matchedTitle;
+      if (chapterCursor < chapterPositions.length &&
+          chapterPositions[chapterCursor].key <= currentCharIndex) {
+        isNewChapter = true;
+        matchedTitle = chapterPositions[chapterCursor].value;
+        chapterCursor++;
+      }
+
+      // 命中新章节：封存旧页，开启新页，完全跳过该行正文录入
+      if (isNewChapter) {
+        if (currentLinesOnPage > 0 || pageBuffer.isNotEmpty) {
+          final pageContent = pageBuffer.toString().trimRight();
+          final pageBytes = utf8.encode(pageContent).length;
+          final pageEndByte = currentByteOffset + pageBytes;
+
+          pages.add(FullTxtPageSlice(
+            pageIndex: pageIdx++,
+            startByteOffset: pageStartByte,
+            endByteOffset: pageEndByte,
+            content: pageContent,
+            chapterTitle: currentPendingChapterTitle,
+          ));
+
+          pageBuffer.clear();
+          currentLinesOnPage = 0;
+          pageStartByte = pageEndByte;
+          currentPendingChapterTitle = null;
+        }
+
+        chapters.add(FullTxtChapterItem(
+          index: chapterCount++,
+          title: matchedTitle!,
+          startByteOffset: currentByteOffset,
+          pageIndex: pageIdx,
+        ));
+
+        currentPendingChapterTitle = matchedTitle;
+        currentLinesOnPage = 1; // 仅预留标题所占行高
+
+        // 推进字节索引并彻底跳过该标题行，绝不进入 pageBuffer
+        currentCharIndex += lineCharLengthWithBreak;
+        currentByteOffset += utf8.encode('$rawLine\n').length;
+        continue;
+      }
+
+      var line = rawLine.trimRight();
+
+      // 如果当前是新章节起始页第一行且为空行，直接过滤跳过
+      if (currentPendingChapterTitle != null && currentLinesOnPage == 1 && line.trim().isEmpty) {
+        currentCharIndex += lineCharLengthWithBreak;
+        currentByteOffset += utf8.encode('$rawLine\n').length;
+        continue;
+      }
+
+      // 普通正文行添加首行缩进
+      if (params.indentFirstLine && line.isNotEmpty &&
+          !line.startsWith('  ') && !line.startsWith('  ')) {
+        line = '  $line';
+      }
+
+      int lineOffset = 0;
+      while (lineOffset < line.length || (lineOffset == 0 && line.isEmpty)) {
+        int endOffset = (lineOffset + charsPerLine < line.length)
+            ? lineOffset + charsPerLine
+            : line.length;
+
+        final subLine = line.isEmpty ? '' : line.substring(lineOffset, endOffset);
+        pageBuffer.writeln(subLine);
+        currentLinesOnPage++;
+
+        if (currentLinesOnPage >= linesPerPage) {
+          final pageContent = pageBuffer.toString().trimRight();
+          final pageBytes = utf8.encode(pageContent).length;
+          final pageEndByte = currentByteOffset + pageBytes;
+
+          pages.add(FullTxtPageSlice(
+            pageIndex: pageIdx++,
+            startByteOffset: pageStartByte,
+            endByteOffset: pageEndByte,
+            content: pageContent,
+            chapterTitle: currentPendingChapterTitle,
+          ));
+
+          pageBuffer.clear();
+          currentLinesOnPage = 0;
+          pageStartByte = pageEndByte;
+          currentPendingChapterTitle = null;
+        }
+
+        if (line.isEmpty) break;
+        lineOffset = endOffset;
+      }
+
+      currentCharIndex += lineCharLengthWithBreak;
+      currentByteOffset += utf8.encode('$rawLine\n').length;
+    }
+
+    if (pageBuffer.isNotEmpty || currentPendingChapterTitle != null) {
+      final pageContent = pageBuffer.toString().trimRight();
+      pages.add(FullTxtPageSlice(
+        pageIndex: pageIdx,
+        startByteOffset: pageStartByte,
+        endByteOffset: totalBytes,
+        content: pageContent,
+        chapterTitle: currentPendingChapterTitle,
+      ));
+    }
+
+    return FullTxtPaginationResult(
+      pages: pages,
+      chapters: chapters,
       totalBytes: totalBytes,
     );
   }

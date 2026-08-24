@@ -141,7 +141,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
           fontSize: _typoConfig.fontSize,
           lineHeight: _typoConfig.lineHeight,
           letterSpacing: _typoConfig.letterSpacing,
-          fontFamily: _typoConfig.customFontFamily,
+          indentFirstLine: _typoConfig.indentFirstLine,
         ),
       );
 
@@ -512,7 +512,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
                                       color: isSelected ? const Color(0xFF8D7358) : Colors.transparent,
                                     ),
                                     labelStyle: TextStyle(
-                                      color: isSelected ? Colors.white : Colors.white70,
+                                      color: isSelected ? Colors.white : Colors.black87,
                                       fontSize: 11,
                                       fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                                     ),
@@ -612,9 +612,17 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         ? _toc[_currentChapterIndex].title
         : widget.title;
 
-    final content = _typoConfig.indentFirstLine
-        ? TypographyConfig.applyIndent(slice.content)
-        : slice.content;
+    final hasChapterHeader = slice.chapterTitle != null && slice.chapterTitle!.isNotEmpty;
+
+    // 清洗正文：彻底剥离开头可能残留的重复标题与空行
+    String cleanContent = slice.content;
+    if (hasChapterHeader) {
+      final title = slice.chapterTitle!.trim();
+      final trimmedContent = cleanContent.trimLeft();
+      if (trimmedContent.startsWith(title)) {
+        cleanContent = trimmedContent.substring(title.length).trimLeft();
+      }
+    }
 
     return SafeArea(
       child: Padding(
@@ -625,6 +633,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 顶部小字章节提示
             SizedBox(
               height: kHeaderHeight,
               child: Text(
@@ -638,27 +647,49 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
             ),
             const SizedBox(height: kHeaderSpacing),
 
+            // 正文区域
             Expanded(
               child: Align(
                 alignment: Alignment.topLeft,
-                child: Text(
-                  content,
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      // 1. 加粗加大章节大标题（仅隔 1 行）
+                      if (hasChapterHeader)
+                        TextSpan(
+                          text: '${slice.chapterTitle!}\n',
+                          style: TextStyle(
+                            fontSize: _typoConfig.fontSize * 1.25,
+                            fontWeight: FontWeight.bold,
+                            height: 1.4,
+                            letterSpacing: _typoConfig.letterSpacing + 0.5,
+                            fontFamily: _typoConfig.customFontFamily ?? 'serif',
+                            color: _currentTheme.textColor,
+                          ),
+                        ),
+                      // 2. 纯净的正文内容
+                      TextSpan(
+                        text: cleanContent,
+                        style: TextStyle(
+                          fontSize: _typoConfig.fontSize,
+                          height: _typoConfig.lineHeight,
+                          letterSpacing: _typoConfig.letterSpacing,
+                          fontFamily: _typoConfig.customFontFamily ?? 'serif',
+                          color: _currentTheme.textColor,
+                        ),
+                      ),
+                    ],
+                  ),
                   strutStyle: StrutStyle(
                     fontSize: _typoConfig.fontSize,
                     height: _typoConfig.lineHeight,
-                    forceStrutHeight: true,
-                  ),
-                  style: TextStyle(
-                    fontSize: _typoConfig.fontSize,
-                    height: _typoConfig.lineHeight,
-                    letterSpacing: _typoConfig.letterSpacing,
-                    fontFamily: _typoConfig.customFontFamily ?? 'serif',
-                    color: _currentTheme.textColor,
+                    forceStrutHeight: false,
                   ),
                 ),
               ),
             ),
 
+            // 底部页码与总进度
             SizedBox(
               height: kFooterHeight,
               child: Row(

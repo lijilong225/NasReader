@@ -28,7 +28,7 @@ dependencies:
   xml: ^6.5.0
 
   # 字体导入与文件选择
-  file_picker: ^8.0.0+1
+  file_picker: ^10.0.0+1
 
 dev_dependencies:
   flutter_test:

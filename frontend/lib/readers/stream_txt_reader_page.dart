@@ -134,7 +134,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       final contentSize = _getContentSize();
       final offsetToLocate = targetByteOffset ?? widget.initialByteOffset;
 
-      final result = await FullTxtEngine.paginateInIsolate(
+      final result = await FullTxtEngine.paginate(
         FullTxtPaginationParams(
           filePath: widget.file.path,
           contentSize: contentSize,

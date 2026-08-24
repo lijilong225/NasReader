@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'app_logger.dart';
@@ -6,88 +7,143 @@ import 'app_logger.dart';
 class BookProgress {
   final String bookId;
   final String title;
-  final String filePath; // NAS 远端路径
-  final double progressPercent;
-  final String? epubCfi;
-  final int? txtByteOffset;
-  final int lastReadTime; // 毫秒时间戳
+  final String filePath;
+  final double progress;
+  final String locator;
+  final int clientUpdatedAt;
 
   BookProgress({
     required this.bookId,
     required this.title,
     required this.filePath,
-    required this.progressPercent,
-    this.epubCfi,
-    this.txtByteOffset,
-    required this.lastReadTime,
+    required this.progress,
+    required this.locator,
+    required this.clientUpdatedAt,
   });
+
+  int? get txtByteOffset {
+    if (locator.isEmpty) return 0;
+    return int.tryParse(locator);
+  }
+
+  String? get epubCfi {
+    return locator.isNotEmpty ? locator : null;
+  }
 
   Map<String, dynamic> toJson() => {
     'book_id': bookId,
     'title': title,
     'file_path': filePath,
-    'progress_percent': progressPercent,
-    'epub_cfi': epubCfi,
-    'txt_byte_offset': txtByteOffset,
-    'last_read_time': lastReadTime,
+    'progress': progress,
+    'locator': locator,
+    'client_updated_at': clientUpdatedAt,
   };
 
-  factory BookProgress.fromJson(Map<String, dynamic> json) => BookProgress(
-    bookId: json['book_id']?.toString() ?? '',
-    title: json['title']?.toString() ?? '',
-    filePath: json['file_path']?.toString() ?? '',
-    progressPercent: (json['progress_percent'] as num?)?.toDouble() ?? 0.0,
-    epubCfi: json['epub_cfi']?.toString(),
-    txtByteOffset: (json['txt_byte_offset'] as num?)?.toInt(),
-    lastReadTime: (json['last_read_time'] as num?)?.toInt() ?? 0,
-  );
+  factory BookProgress.fromJson(Map<String, dynamic> json) {
+    final bookId = (json['book_id'] ?? json['BookID'] ?? '').toString();
+    final title = (json['title'] ?? json['Title'] ?? '').toString();
+    final filePath = (json['file_path'] ?? json['FilePath'] ?? '').toString();
+
+    final rawProgress = json['progress'] ?? json['Progress'] ?? 0.0;
+    final progress = (rawProgress is num) ? rawProgress.toDouble() : (double.tryParse(rawProgress.toString()) ?? 0.0);
+
+    final locator = (json['locator'] ?? json['Locator'] ?? '').toString();
+
+    final rawTime = json['client_updated_at'] ?? json['ClientUpdatedAt'] ?? 0;
+    int clientUpdatedAt = 0;
+    if (rawTime is num) {
+      clientUpdatedAt = rawTime.toInt();
+      if (clientUpdatedAt < 10000000000) clientUpdatedAt *= 1000;
+    }
+
+    return BookProgress(
+      bookId: bookId,
+      title: title,
+      filePath: filePath,
+      progress: progress,
+      locator: locator,
+      clientUpdatedAt: clientUpdatedAt,
+    );
+  }
 }
 
 class ProgressSyncService {
   static const String _storageKey = 'local_reading_progress_map';
+  static String? _cachedDeviceId;
 
-  /// 1. 保存本地进度并上报给 NAS 远端
+  static Future<String> _getDeviceId() async {
+    if (_cachedDeviceId != null) return _cachedDeviceId!;
+    final prefs = await SharedPreferences.getInstance();
+    String? deviceId = prefs.getString('app_device_id');
+    if (deviceId == null || deviceId.isEmpty) {
+      deviceId = 'flutter_${DateTime.now().millisecondsSinceEpoch}_${Platform.operatingSystem}';
+      await prefs.setString('app_device_id', deviceId);
+    }
+    _cachedDeviceId = deviceId;
+    return deviceId;
+  }
+
+  /// 1. 保存本地并完整上报 NAS（携带 title & file_path）
   static Future<void> updateProgress({
     required Dio? dio,
     required String bookId,
     required String title,
     required String filePath,
     required double progressPercent,
-    String? epubCfi,
-    int? txtByteOffset,
+    String? locator,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final item = BookProgress(
       bookId: bookId,
       title: title,
       filePath: filePath,
-      progressPercent: progressPercent,
-      epubCfi: epubCfi,
-      txtByteOffset: txtByteOffset,
-      lastReadTime: now,
+      progress: progressPercent.clamp(0.0, 1.0),
+      locator: locator ?? '',
+      clientUpdatedAt: now,
     );
 
-    // 写入本地存储
+    // 写入本地 SharedPreferences
     final prefs = await SharedPreferences.getInstance();
     final rawMap = prefs.getString(_storageKey);
     Map<String, dynamic> map = rawMap != null ? jsonDecode(rawMap) : {};
     map[bookId] = item.toJson();
     await prefs.setString(_storageKey, jsonEncode(map));
 
-    // 上报后端：POST /api/v1/sync/progress
+    // 上报后端
     if (dio != null) {
       try {
-        await dio.post('/api/v1/sync/progress', data: item.toJson());
+        final deviceId = await _getDeviceId();
+        final requestData = {
+          'book_id': bookId,
+          'title': title,
+          'file_path': filePath,
+          'progress': progressPercent.clamp(0.0, 1.0),
+          'locator': locator ?? '0',
+          'device_id': deviceId,
+          'device_name': Platform.operatingSystem,
+          'client_updated_at': now,
+        };
+
+        final res = await dio.post('/api/v1/sync/progress', data: requestData);
+        AppLogger.log('✅ 进度同步成功: $title -> ${(progressPercent * 100).toStringAsFixed(1)}% (HTTP ${res.statusCode})');
+      } on DioException catch (e) {
+        if (e.response?.statusCode == 409) {
+          AppLogger.log('ℹ️ 远端存在更新的阅读进度 (LWW)');
+        } else {
+          AppLogger.log('❌ 进度上报失败: ${e.response?.data ?? e.message}');
+        }
       } catch (e) {
-        AppLogger.log('⚠️ 上报进度至远端失败: $e');
+        AppLogger.log('❌ 进度上报异常: $e');
       }
     }
   }
 
-  /// 2. 从 NAS 远端拉取最新全量阅读进度：GET /api/v1/sync/progress
+  /// 2. 冷启动/下拉刷新从 NAS 远端拉取全量记录
   static Future<List<BookProgress>> syncWithRemote(Dio dio) async {
     try {
       final res = await dio.get('/api/v1/sync/progress');
+      AppLogger.log('📡 远端拉取进度响应: ${res.data}');
+
       if (res.statusCode == 200 && res.data != null) {
         List<dynamic> remoteList = [];
         if (res.data is Map && res.data['data'] is List) {
@@ -104,10 +160,10 @@ class ProgressSyncService {
           final remoteItem = BookProgress.fromJson(Map<String, dynamic>.from(raw));
           if (remoteItem.bookId.isEmpty) continue;
 
-          // 时间戳对比：保留最新进度
+          // 本地不存在或远端时间戳更新，则更新本地
           if (localMap.containsKey(remoteItem.bookId)) {
             final localItem = BookProgress.fromJson(localMap[remoteItem.bookId]);
-            if (remoteItem.lastReadTime > localItem.lastReadTime) {
+            if (remoteItem.clientUpdatedAt >= localItem.clientUpdatedAt) {
               localMap[remoteItem.bookId] = remoteItem.toJson();
             }
           } else {
@@ -116,9 +172,8 @@ class ProgressSyncService {
         }
 
         await prefs.setString(_storageKey, jsonEncode(localMap));
+        AppLogger.log('✅ 远端书架合并完成，有效书籍记录数: ${localMap.length}');
       }
-    } on DioException catch (e) {
-      AppLogger.log('⚠️ 远端进度同步异常: ${e.message}');
     } catch (e) {
       AppLogger.log('⚠️ 远端进度同步异常: $e');
     }
@@ -126,14 +181,14 @@ class ProgressSyncService {
     return getAllLocalProgress();
   }
 
-  /// 获取本地所有阅读记录列表
+  /// 3. 获取本地所有阅读记录
   static Future<List<BookProgress>> getAllLocalProgress() async {
     final prefs = await SharedPreferences.getInstance();
     final rawMap = prefs.getString(_storageKey);
     if (rawMap == null) return [];
     final map = jsonDecode(rawMap) as Map<String, dynamic>;
     final list = map.values.map((v) => BookProgress.fromJson(v)).toList();
-    list.sort((a, b) => b.lastReadTime.compareTo(a.lastReadTime));
+    list.sort((a, b) => b.clientUpdatedAt.compareTo(a.clientUpdatedAt));
     return list;
   }
 }

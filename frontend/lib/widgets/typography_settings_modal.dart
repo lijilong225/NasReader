@@ -177,7 +177,7 @@ class _TypographySettingsModalState extends State<TypographySettingsModal> {
               contentPadding: EdgeInsets.zero,
               title: const Text('段首缩进 (2 字符)', style: TextStyle(color: Colors.white70, fontSize: 13)),
               value: _config.indentFirstLine,
-              activeColor: Colors.brown.shade300,
+              activeThumbColor: Colors.brown.shade300,
               onChanged: (v) => _update(_config.copyWith(indentFirstLine: v)),
             ),
           ],

@@ -5,7 +5,6 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../services/app_logger.dart';
-import '../services/auth_service.dart';
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
 

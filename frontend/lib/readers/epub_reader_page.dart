@@ -339,8 +339,8 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   }
 
   void _applyTheme(Color bg, Color text) {
-    final bgHex = '#${bg.value.toRadixString(16).substring(2)}';
-    final textHex = '#${text.value.toRadixString(16).substring(2)}';
+    final bgHex = '#${bg.toARGB32().toRadixString(16).substring(2)}';
+    final textHex = '#${text.toARGB32().toRadixString(16).substring(2)}';
     _webViewController.runJavaScript('window.setTheme("$bgHex", "$textHex");');
   }
 

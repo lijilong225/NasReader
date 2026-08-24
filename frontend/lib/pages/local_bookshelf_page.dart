@@ -300,7 +300,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                   decoration: BoxDecoration(
-                    color: Colors.grey.withOpacity(0.2),
+                    color: Colors.grey.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: const Text('云端记录 · 点击下载', style: TextStyle(fontSize: 10, color: Colors.grey)),

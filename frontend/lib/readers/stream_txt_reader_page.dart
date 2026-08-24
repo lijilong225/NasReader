@@ -55,6 +55,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   int _currentPageIndex = 0;
   int _currentChapterIndex = 0;
   int _lastReportedOffset = -1;
+  bool _isTurningPage = false; // 防抖锁状态标记
 
   ReaderThemeData _currentTheme = ReaderThemes.parchment;
   PageTurnMode _pageTurnMode = PageTurnMode.none;
@@ -277,20 +278,37 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   void _onPageChanged(int pageIndex) {
     if (pageIndex < 0 || pageIndex >= _pages.length) return;
     _currentPageIndex = pageIndex;
+    _isTurningPage = false; // 翻页完成，释放锁
     _updateCurrentChapterByPageIndex(pageIndex);
     _saveCurrentProgress();
   }
 
+  /// 统一的翻页调度引擎（支持防抖锁与即时状态同步）
+  void _turnToPage(int targetIndex) {
+    if (_isTurningPage) return;
+    if (targetIndex < 0 || targetIndex >= _pages.length) return;
+    if (targetIndex == _currentPageIndex) return;
+
+    _isTurningPage = true;
+    _currentPageIndex = targetIndex;
+    _updateCurrentChapterByPageIndex(targetIndex);
+
+    _turnViewKey.currentState?.jumpToPage(targetIndex);
+
+    // 延时释放防抖保护
+    Future.delayed(const Duration(milliseconds: 120), () {
+      if (mounted) {
+        _isTurningPage = false;
+      }
+    });
+  }
+
   void _prevPage() {
-    if (_currentPageIndex > 0) {
-      _turnViewKey.currentState?.jumpToPage(_currentPageIndex - 1);
-    }
+    _turnToPage(_currentPageIndex - 1);
   }
 
   void _nextPage() {
-    if (_currentPageIndex < _pages.length - 1) {
-      _turnViewKey.currentState?.jumpToPage(_currentPageIndex + 1);
-    }
+    _turnToPage(_currentPageIndex + 1);
   }
 
   void _jumpToChapter(FullTxtChapterItem chapter) {
@@ -327,6 +345,8 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         return GestureDetector(
           behavior: HitTestBehavior.translucent,
           onTapUp: (details) {
+            if (_isTurningPage) return; // 拦截高频并发点击
+
             if (_showControls) {
               setState(() => _showControls = false);
               return;

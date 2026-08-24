@@ -6,95 +6,92 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"reader-sync/utils"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
-// NAS 根目录路径（可通过环境变量配置）
-var NASBasePath = getEnv("NAS_BOOKS_DIR", "/nas/books")
-
-func getEnv(key, fallback string) string {
-	if val, ok := os.LookupEnv(key); ok {
-		return val
-	}
-	return fallback
-}
-
 // FileNode 目录树节点结构
 type FileNode struct {
 	Name      string `json:"name"`
-	Path      string `json:"path"` // 相对路径，如 /科幻/三体.epub
+	Path      string `json:"path"`                // 统一的相对路径，如 /科幻/三体.epub
 	IsDir     bool   `json:"is_dir"`
 	Size      int64  `json:"size"`
 	Extension string `json:"extension,omitempty"` // txt / epub
-	BookID    string `json:"book_id,omitempty"`   // 文件的唯一指纹（用于进度同步）
+	BookID    string `json:"book_id,omitempty"`   // 文件的唯一指纹（用于跨设备精确同步）
 	ModTime   int64  `json:"mod_time"`
 }
 
-// BrowseDirectory 浏览目录（支持子目录分页/原样透传）
+// BrowseDirectory 浏览目录（使用 safe_path 防穿越与越界）
 func BrowseDirectory(c *gin.Context) {
-	targetDir, err := utils.SafeResolvePath(c.DefaultQuery("path", "/"))
+	reqPath := c.DefaultQuery("path", "/")
+
+	// 1. 安全解析目标目录物理绝对路径
+	targetDir, err := utils.SafeResolvePath(reqPath)
 	if err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
+
 	entries, err := os.ReadDir(targetDir)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "目录不存在或无法读取"})
+		if os.IsNotExist(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "目录不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法读取目录: " + err.Error()})
 		return
 	}
 
-	relPath := c.DefaultQuery("path", "/")
-
-	// 路径防穿透安全检查
-	cleanRelPath := filepath.Clean(relPath)
-	if strings.HasPrefix(cleanRelPath, "..") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid directory path"})
-		return
-	}
-
-	targetDir := filepath.Join(NASBasePath, cleanRelPath)
-	entries, err := os.ReadDir(targetDir)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Directory not found: %v", err)})
-		return
-	}
-
+	nasRoot := utils.GetNasRootDir()
 	var nodes []FileNode
+
 	for _, entry := range entries {
-		// 忽略隐藏文件/文件夹（如 .DS_Store, .git 等）
-		if strings.HasPrefix(entry.Name(), ".") {
+		name := entry.Name()
+		// 忽略隐藏文件及文件夹（.DS_Store, .git 等）
+		if strings.HasPrefix(name, ".") {
 			continue
 		}
 
-		entryPath := filepath.Join(cleanRelPath, entry.Name())
-		info, err := entry.Info()
-		if err != nil {
+		fullEntryPath := filepath.Join(targetDir, name)
+		info, infoErr := entry.Info()
+		if infoErr != nil {
 			continue
+		}
+
+		// 计算相对于 NAS 根目录的标准相对路径
+		relPath, relErr := filepath.Rel(nasRoot, fullEntryPath)
+		if relErr != nil {
+			continue
+		}
+
+		// 统一斜杠分隔符，确保多平台与前端路径一致
+		standardRelPath := filepath.ToSlash(relPath)
+		if !strings.HasPrefix(standardRelPath, "/") {
+			standardRelPath = "/" + standardRelPath
 		}
 
 		if entry.IsDir() {
 			nodes = append(nodes, FileNode{
-				Name:    entry.Name(),
-				Path:    entryPath,
+				Name:    name,
+				Path:    standardRelPath,
 				IsDir:   true,
 				Size:    0,
 				ModTime: info.ModTime().UnixMilli(),
 			})
 		} else {
-			ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(entry.Name()), "."))
-			// 只保留 txt 和 epub
+			ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))
+			// 只过滤展示支持的电子书格式
 			if ext == "txt" || ext == "epub" {
-				fullFilePath := filepath.Join(targetDir, entry.Name())
-				bookID := GenerateFastFileFingerprint(fullFilePath, info.Size())
+				bookID := GenerateFastFileFingerprint(fullEntryPath, info.Size())
 
 				nodes = append(nodes, FileNode{
-					Name:      entry.Name(),
-					Path:      entryPath,
+					Name:      name,
+					Path:      standardRelPath,
 					IsDir:     false,
 					Size:      info.Size(),
 					Extension: ext,
@@ -106,11 +103,12 @@ func BrowseDirectory(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"current_path": cleanRelPath,
+		"current_path": reqPath,
 		"items":        nodes,
 	})
 }
 
+// DownloadFile 安全下载电子书文件
 func DownloadFile(c *gin.Context) {
 	relPath := c.Query("path")
 	if relPath == "" {
@@ -141,7 +139,7 @@ func DownloadFile(c *gin.Context) {
 		return
 	}
 
-	// 3. 电子书格式白名单（防止暴露同目录下的 .nfo, .json, .sh 等文件）
+	// 3. 电子书格式白名单（防止读取目录下的隐藏敏感文件）
 	ext := strings.ToLower(filepath.Ext(targetFilePath))
 	if ext != ".txt" && ext != ".epub" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "不支持下载非电子书文件"})

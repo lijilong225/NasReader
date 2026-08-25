@@ -2,35 +2,75 @@ package main
 
 import (
 	"log"
+	"net/http"
+	"os"
 	"reader-sync/config"
 	"reader-sync/handlers"
 	"reader-sync/middleware"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-func main() {
-	config.InitDB()
+// allowedOrigins 解析 CORS_ALLOWED_ORIGINS（逗号分隔）。为空表示不放行任何跨域请求。
+func allowedOrigins() map[string]bool {
+	raw := strings.TrimSpace(os.Getenv("CORS_ALLOWED_ORIGINS"))
+	origins := make(map[string]bool)
+	if raw == "" {
+		return origins
+	}
+	for _, item := range strings.Split(raw, ",") {
+		if o := strings.TrimSpace(item); o != "" {
+			origins[o] = true
+		}
+	}
+	return origins
+}
 
-	r := gin.Default()
+func corsMiddleware() gin.HandlerFunc {
+	origins := allowedOrigins()
+	if len(origins) == 0 {
+		log.Println("CORS: 未配置 CORS_ALLOWED_ORIGINS，将拒绝所有浏览器跨域请求（原生客户端不受影响）")
+	}
 
-	r.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+	return func(c *gin.Context) {
+		origin := c.GetHeader("Origin")
+		if origin != "" && origins[origin] {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+			c.Writer.Header().Set("Vary", "Origin")
+			c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+			c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+		}
 
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
+		if c.Request.Method == http.MethodOptions {
+			if origin != "" && !origins[origin] {
+				c.AbortWithStatus(http.StatusForbidden)
+				return
+			}
+			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
 		c.Next()
-	})
+	}
+}
+
+func main() {
+	middleware.InitJwtSecret()
+	config.InitDB()
+
+	handlers.AuthLimiter.StartCleanup(10 * time.Minute)
+
+	r := gin.Default()
+
+	r.Use(corsMiddleware())
 
 	api := r.Group("/api/v1")
 	{
 		// 开放接口：用户注册与登录
 		authGroup := api.Group("/auth")
+		authGroup.Use(middleware.AuthRateLimit(handlers.AuthLimiter))
 		{
 			authGroup.POST("/register", handlers.Register)
 			authGroup.POST("/login", handlers.Login)

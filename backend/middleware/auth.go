@@ -1,14 +1,18 @@
 package middleware
 
 import (
+	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
-	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
+
+// JWT 密钥最小长度，低于此长度的 HS256 密钥容易被离线爆破
+const minJwtSecretLength = 32
 
 type Claims struct {
 	UserID   string `json:"user_id"`
@@ -16,13 +20,26 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+var jwtSecret []byte
+
+// InitJwtSecret 必须在启动阶段调用：密钥缺失或过弱时直接终止进程，
+// 避免使用可预测的默认密钥导致任意用户身份被伪造。
+func InitJwtSecret() {
+	secret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+	if secret == "" {
+		log.Fatal("启动失败: 必须设置环境变量 JWT_SECRET（建议 32 字节以上随机字符串）")
+	}
+	if len(secret) < minJwtSecretLength {
+		log.Fatalf("启动失败: JWT_SECRET 长度不足 %d 字节，请使用更强的随机密钥", minJwtSecretLength)
+	}
+	jwtSecret = []byte(secret)
+}
+
 func GetJwtSecret() []byte {
-    secret := os.Getenv("JWT_SECRET")
-    if secret == "" {
-        // 如果未设置环境变量，生产环境强制拦截或使用高强度默认值
-        secret = "default_secret_key_please_change"
-    }
-    return []byte(secret)
+	if len(jwtSecret) == 0 {
+		log.Fatal("JWT 密钥未初始化，请在启动时调用 middleware.InitJwtSecret()")
+	}
+	return jwtSecret
 }
 
 // GenerateToken 生成 7 天有效期的 JWT
@@ -52,7 +69,7 @@ func AuthMiddleware() gin.HandlerFunc {
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 		token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 			return GetJwtSecret(), nil
-		})
+		}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 
 		if err != nil || !token.Valid {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})

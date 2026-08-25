@@ -2,11 +2,15 @@ package handlers
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
+	"log"
 	"net/http"
+	"os"
 	"reader-sync/config"
 	"reader-sync/middleware"
 	"reader-sync/models"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -19,10 +23,38 @@ var AuthLimiter = middleware.NewLoginRateLimiter(5, 15*time.Minute, 15*time.Minu
 // dummyPasswordHash 用于用户不存在时的等时比对，抵御用户名枚举。
 var dummyPasswordHash, _ = bcrypt.GenerateFromPassword([]byte("dummy-password-for-constant-time"), bcrypt.DefaultCost)
 
+// inviteCode 为空表示关闭注册；由 InitInviteCode 在启动时读取一次。
+var inviteCode string
+
+// InitInviteCode 读取 REGISTRATION_INVITE_CODE，未设置则注册接口全程返回 403。
+func InitInviteCode() {
+	inviteCode = strings.TrimSpace(os.Getenv("REGISTRATION_INVITE_CODE"))
+	switch {
+	case inviteCode == "":
+		log.Println("注册已关闭：未设置 REGISTRATION_INVITE_CODE")
+	case len(inviteCode) < 8:
+		log.Println("警告：REGISTRATION_INVITE_CODE 短于 8 字节，建议改用更长的随机值")
+	default:
+		log.Println("注册已开启：需提供邀请码")
+	}
+}
+
+func registrationEnabled() bool {
+	return inviteCode != ""
+}
+
+func inviteCodeMatches(provided string) bool {
+	if inviteCode == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(strings.TrimSpace(provided)), []byte(inviteCode)) == 1
+}
+
 // RegisterRequest 注册时强制更长的密码
 type RegisterRequest struct {
-	Username string `json:"username" binding:"required,min=3,max=50"`
-	Password string `json:"password" binding:"required,min=8"`
+	Username   string `json:"username" binding:"required,min=3,max=50"`
+	Password   string `json:"password" binding:"required,min=8"`
+	InviteCode string `json:"inviteCode" binding:"required"`
 }
 
 // AuthRequest 登录用；保持 min=6 以便历史用户仍可登录
@@ -32,9 +64,21 @@ type AuthRequest struct {
 }
 
 func Register(c *gin.Context) {
+	if !registrationEnabled() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "服务端未开放注册"})
+		return
+	}
+
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	clientKey := c.ClientIP()
+	if !inviteCodeMatches(req.InviteCode) {
+		AuthLimiter.RecordFailure(clientKey)
+		c.JSON(http.StatusForbidden, gin.H{"error": "邀请码无效"})
 		return
 	}
 
@@ -64,6 +108,8 @@ func Register(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
 		return
 	}
+
+	AuthLimiter.Reset(clientKey)
 
 	token, _ := middleware.GenerateToken(user.ID, user.Username)
 	c.JSON(http.StatusOK, gin.H{

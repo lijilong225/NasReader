@@ -20,6 +20,7 @@ class _LoginPageState extends State<LoginPage> {
   final _serverController = TextEditingController(text: ApiConfig.baseUrl);
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _inviteCodeController = TextEditingController();
 
   bool _isRegisterMode = false;
   bool _isLoading = false;
@@ -45,6 +46,7 @@ class _LoginPageState extends State<LoginPage> {
     _serverController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
+    _inviteCodeController.dispose();
     super.dispose();
   }
 
@@ -73,6 +75,7 @@ class _LoginPageState extends State<LoginPage> {
         data: {
           'username': username,
           'password': password,
+          if (_isRegisterMode) 'inviteCode': _inviteCodeController.text.trim(),
         },
       );
 
@@ -203,6 +206,22 @@ class _LoginPageState extends State<LoginPage> {
                         (v == null || v.length < 6) ? '密码长度至少 6 位' : null,
                   ),
                   const SizedBox(height: 16),
+
+                  // 邀请码（仅注册）
+                  if (_isRegisterMode) ...[
+                    TextFormField(
+                      controller: _inviteCodeController,
+                      decoration: const InputDecoration(
+                        labelText: '邀请码',
+                        helperText: '由服务端管理员提供',
+                        prefixIcon: Icon(Icons.vpn_key_outlined),
+                        border: OutlineInputBorder(),
+                      ),
+                      validator: (v) =>
+                          (v == null || v.trim().isEmpty) ? '请输入邀请码' : null,
+                    ),
+                    const SizedBox(height: 16),
+                  ],
 
                   if (_errorMessage != null) ...[
                     Text(

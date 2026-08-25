@@ -58,6 +58,7 @@ func corsMiddleware() gin.HandlerFunc {
 
 func main() {
 	middleware.InitJwtSecret()
+	handlers.InitInviteCode()
 	config.InitDB()
 
 	handlers.AuthLimiter.StartCleanup(10 * time.Minute)

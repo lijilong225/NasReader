@@ -13,6 +13,8 @@ services:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
       # 可选：仅当有浏览器端跨域访问时填写，逗号分隔的完整来源
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
+      # 可选：注册邀请码。留空即完全关闭注册接口
+      - REGISTRATION_INVITE_CODE=${REGISTRATION_INVITE_CODE:-}
       - GIN_MODE=release
       - NAS_BOOKS_DIR=/nas/books
     volumes:

@@ -194,6 +194,12 @@
       "languageVersion": "3.10"
     },
     {
+      "name": "http",
+      "rootUri": "file:///Users/lijilong/.pub-cache/hosted/pub.dev/http-1.6.0",
+      "packageUri": "lib/",
+      "languageVersion": "3.4"
+    },
+    {
       "name": "http_parser",
       "rootUri": "file:///Users/lijilong/.pub-cache/hosted/pub.dev/http_parser-4.1.2",
       "packageUri": "lib/",
@@ -342,6 +348,18 @@
       "rootUri": "file:///Users/lijilong/.pub-cache/hosted/pub.dev/package_config-3.0.0",
       "packageUri": "lib/",
       "languageVersion": "3.11"
+    },
+    {
+      "name": "package_info_plus",
+      "rootUri": "file:///Users/lijilong/.pub-cache/hosted/pub.dev/package_info_plus-8.3.1",
+      "packageUri": "lib/",
+      "languageVersion": "3.3"
+    },
+    {
+      "name": "package_info_plus_platform_interface",
+      "rootUri": "file:///Users/lijilong/.pub-cache/hosted/pub.dev/package_info_plus_platform_interface-3.2.1",
+      "packageUri": "lib/",
+      "languageVersion": "2.18"
     },
     {
       "name": "path",

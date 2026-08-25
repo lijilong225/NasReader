@@ -7,6 +7,7 @@ import 'package:nas_reader/config/theme_manager.dart'; // 👈 引入 ThemeManag
 import 'package:nas_reader/services/auth_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'login_page.dart';
@@ -28,6 +29,7 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
   String _cacheSizeStr = '计算中...';
   bool _isClearing = false;
   bool _isCalculating = false;
+  String _versionStr = '';
 
   // release 包的隐藏入口：连点“存储与诊断”标题解锁日志面板
   static const _unlockTapCount = 5;
@@ -57,6 +59,18 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     calculateCacheSize();
+    _loadVersion();
+  }
+
+  /// 源于 pubspec.yaml 的 version，构建时注入到各平台包信息
+  Future<void> _loadVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (!mounted) return;
+      setState(() => _versionStr = 'v${info.version}+${info.buildNumber}');
+    } catch (e) {
+      AppLogger.log('⚠️ 读取版本信息失败: $e');
+    }
   }
 
   @override
@@ -231,11 +245,14 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
             ),
             const SizedBox(height: 12),
             const Divider(),
-            const Row(
+            Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('版本', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                Text('v0.5.6', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                const Text('版本', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                Text(
+                  _versionStr.isEmpty ? '读取中...' : _versionStr,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                ),
               ],
             ),
           ],

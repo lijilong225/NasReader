@@ -30,6 +30,9 @@ dependencies:
   # 字体导入与文件选择
   file_picker: ^10.0.0+1
 
+  # 读取构建时注入的 versionName/versionCode
+  package_info_plus: ^8.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

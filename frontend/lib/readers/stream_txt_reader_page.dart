@@ -94,7 +94,9 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       if (savedMode == HandMode.oneHand.name && mounted) {
         setState(() => _handMode = HandMode.oneHand);
       }
-    } catch (_) {}
+    } catch (e) {
+      AppLogger.log('⚠️ TXT 手势模式读取失败: $e');
+    }
   }
 
   Future<void> _saveHandMode(HandMode mode) async {
@@ -102,7 +104,9 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('txt_hand_mode', mode.name);
-    } catch (_) {}
+    } catch (e) {
+      AppLogger.log('⚠️ TXT 手势模式保存失败: $e');
+    }
   }
 
   Future<void> _loadBookmarks() async {

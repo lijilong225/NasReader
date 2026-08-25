@@ -115,7 +115,9 @@ class FileBrowserPageState extends State<FileBrowserPage> {
           orElse: () => FileSortType.timeDesc,
         );
       }
-    } catch (_) {}
+    } catch (e) {
+      AppLogger.log('⚠️ 排序偏好读取失败，使用默认排序: $e');
+    }
   }
 
   Future<void> _changeSort(FileSortType newSort) async {

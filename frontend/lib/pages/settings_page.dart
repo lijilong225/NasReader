@@ -90,7 +90,9 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
           bytes += await item.length();
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      AppLogger.log('⚠️ 缓存大小统计不完整: $e');
+    }
     return bytes;
   }
 
@@ -138,7 +140,9 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
         for (final item in list) {
           try {
             item.deleteSync(recursive: true);
-          } catch (_) {}
+          } catch (e) {
+            AppLogger.log('⚠️ 临时文件未能删除 [${item.path}]: $e');
+          }
         }
       }
 
@@ -149,7 +153,9 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
         for (final item in list) {
           try {
             item.deleteSync(recursive: true);
-          } catch (_) {}
+          } catch (e) {
+            AppLogger.log('⚠️ 缓存书籍未能删除 [${item.path}]: $e');
+          }
         }
       }
 

@@ -2,14 +2,14 @@ FROM golang:1.22-alpine AS builder
 
 WORKDIR /app
 
-# 复制所有源码
+# 先单独下载依赖，命中缓存层；go.sum 已入库，构建期不再 tidy，保证可复现
+COPY go.mod go.sum ./
+RUN go mod download
+
 COPY . .
 
-# 整理依赖
-RUN go mod tidy
-
 # 纯 Go 静态编译，跨平台秒编通过
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o reader-server .
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -ldflags="-w -s" -o reader-server .
 
 FROM alpine:latest
 WORKDIR /app

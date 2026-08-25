@@ -63,8 +63,8 @@ func (l *LoginRateLimiter) RecordFailure(key string) {
 	now := time.Now()
 	rec, ok := l.attempts[key]
 	if !ok || now.Sub(rec.firstFailAt) > l.window {
-		l.attempts[key] = &attemptRecord{failures: 1, firstFailAt: now}
-		return
+		rec = &attemptRecord{firstFailAt: now}
+		l.attempts[key] = rec
 	}
 
 	rec.failures++

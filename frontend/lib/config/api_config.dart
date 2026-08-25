@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/app_logger.dart';
 
 // lib/config/api_config.dart 中的 AuthUser
 class AuthUser {
@@ -87,7 +88,8 @@ class ApiConfig {
     if (rawUser != null && rawUser.isNotEmpty) {
       try {
         _currentUser = AuthUser.fromJson(jsonDecode(rawUser));
-      } catch (_) {
+      } catch (e) {
+        AppLogger.log('⚠️ 本地用户信息损坏，已丢弃: $e');
         _currentUser = null;
       }
     }

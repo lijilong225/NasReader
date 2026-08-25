@@ -3,6 +3,7 @@ import 'package:archive/archive.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:xml/xml.dart';
+import 'app_logger.dart';
 
 class EpubCoverExtractor {
   /// 获取封面缩略图缓存目录: ~/Documents/CoverThumbnails/
@@ -124,7 +125,8 @@ class EpubCoverExtractor {
       final coverBytes = coverImageFile.content as List<int>;
       await targetCoverFile.writeAsBytes(coverBytes);
       return targetCoverFile;
-    } catch (_) {
+    } catch (e) {
+      AppLogger.log('⚠️ EPUB 封面提取失败，将使用占位图: $e');
       return null;
     }
   }

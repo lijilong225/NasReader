@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import '../services/app_logger.dart';
 
 class CustomFontItem {
   final String name;       // 字体展示名称
@@ -81,6 +82,8 @@ class FontManager {
         return ByteData.view(bytes.buffer);
       }());
       await fontLoader.load();
-    } catch (_) {}
+    } catch (e) {
+      AppLogger.log('⚠️ 字体注册失败，将回退默认字体 [$fontFamily]: $e');
+    }
   }
 }

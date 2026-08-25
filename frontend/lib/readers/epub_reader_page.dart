@@ -106,7 +106,9 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
       if (savedMode == HandMode.oneHand.name && mounted) {
         setState(() => _handMode = HandMode.oneHand);
       }
-    } catch (_) {}
+    } catch (e) {
+      AppLogger.log('⚠️ EPUB 手势模式读取失败: $e');
+    }
   }
 
   Future<void> _saveHandMode(HandMode mode) async {
@@ -114,7 +116,9 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('epub_hand_mode', mode.name);
-    } catch (_) {}
+    } catch (e) {
+      AppLogger.log('⚠️ EPUB 手势模式保存失败: $e');
+    }
   }
 
   Future<void> _loadBookmarks() async {
@@ -257,7 +261,9 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
           }
           break;
       }
-    } catch (_) {}
+    } catch (e) {
+      AppLogger.log('⚠️ EPUB 内嵌页消息解析失败: $e');
+    }
   }
 
   String _buildEpubViewerHtml(
@@ -325,7 +331,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     const wrapper = document.getElementById("wrapper");
 
     try {
-      const base64Data = "$base64Epub";
+      const base64Data = ${jsonEncode(base64Epub)};
       const arrayBuffer = base64ToArrayBuffer(base64Data);
 
       const book = ePub(arrayBuffer);

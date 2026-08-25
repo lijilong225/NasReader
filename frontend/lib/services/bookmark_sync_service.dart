@@ -1,4 +1,5 @@
 // lib/services/bookmark_sync_service.dart
+import 'dart:async';
 import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:nas_reader/core/network_client.dart';
@@ -38,12 +39,8 @@ class BookmarkSyncService {
     }
 
     await prefs.setStringList(key, list.map((e) => jsonEncode(e.toJson())).toList());
-    
-    // 静默推送到后端
-    // ignore: body_might_complete_normally_catch_error
-    syncWithServer(bookmark.bookId).catchError((e) {
-      AppLogger.log('⚠️ 后端同步推迟: $e');
-    });
+
+    _pushInBackground(bookmark.bookId);
   }
 
 // 删除时更新为当前毫秒时间戳
@@ -60,9 +57,16 @@ class BookmarkSyncService {
         updatedAt: DateTime.now().millisecondsSinceEpoch,
       );
       await prefs.setStringList(key, list.map((e) => jsonEncode(e.toJson())).toList());
-      // ignore: body_might_complete_normally_catch_error
-      syncWithServer(bookId).catchError((_) {});
+      _pushInBackground(bookId);
     }
+  }
+
+  /// 本地写入后不阻塞 UI 地推送到后端，失败只记日志，等下次同步补齐
+  static void _pushInBackground(String bookId) {
+    unawaited(syncWithServer(bookId).then<void>(
+      (_) {},
+      onError: (Object e) => AppLogger.log('⚠️ 书签后端同步推迟: $e'),
+    ));
   }
 
   /// 双向合并同步引擎

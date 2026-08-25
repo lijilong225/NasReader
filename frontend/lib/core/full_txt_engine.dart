@@ -76,12 +76,9 @@ class FullTxtEngine {
     String text;
     try {
       text = utf8.decode(bytes);
-    } catch (_) {
-      try {
-        text = const Utf8Decoder(allowMalformed: true).convert(bytes);
-      } catch (_) {
-        text = String.fromCharCodes(bytes);
-      }
+    } on FormatException {
+      // 非严格 UTF-8 文本，改用容错解码（allowMalformed 不会抛异常）
+      text = const Utf8Decoder(allowMalformed: true).convert(bytes);
     }
 
     if (text.isEmpty) {

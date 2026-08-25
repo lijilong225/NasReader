@@ -2,3 +2,10 @@ frontend/.dart_tool
 frontend/android/.gradle
 frontend/android/build
 frontend/build
+
+# 含本机 SDK 绝对路径，由 Flutter 构建时自动生成
+frontend/android/local.properties
+
+# 运行时数据与本地配置
+backend/data/
+.env

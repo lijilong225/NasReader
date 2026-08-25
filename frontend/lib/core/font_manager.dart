@@ -73,6 +73,20 @@ class FontManager {
     return fontItem;
   }
 
+  /// 删除已导入的字体文件。引擎已注册的 fontFamily 无法注销，重启后才彻底失效
+  Future<bool> deleteFont(CustomFontItem item) async {
+    try {
+      if (await item.file.exists()) {
+        await item.file.delete();
+      }
+      _fonts.removeWhere((f) => f.file.path == item.file.path);
+      return true;
+    } catch (e) {
+      AppLogger.log('⚠️ 字体删除失败 [${item.name}]: $e');
+      return false;
+    }
+  }
+
   /// 动态注册到 Flutter FontLoader
   Future<void> _registerFont(String fontFamily, File file) async {
     try {

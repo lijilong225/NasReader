@@ -77,6 +77,36 @@ class _TypographySettingsModalState extends State<TypographySettingsModal> {
     }
   }
 
+  Future<void> _confirmDeleteFont(CustomFontItem item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除字体'),
+        content: Text('确定删除已导入的字体「${item.name}」吗？重启应用后彻底生效。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final ok = await FontManager.instance.deleteFont(item);
+    if (!mounted) return;
+    if (ok && _config.customFontFamily == item.fontFamily) {
+      _update(_config.copyWith(clearFont: true));
+    } else {
+      setState(() {});
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -99,7 +129,7 @@ class _TypographySettingsModalState extends State<TypographySettingsModal> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('字体选择', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                  const Text('字体选择（长按可删除）', style: TextStyle(color: Colors.white70, fontSize: 13)),
                   TextButton.icon(
                     onPressed: _pickAndImportFont,
                     icon: const Icon(Icons.add, size: 16, color: Colors.blueAccent),
@@ -127,16 +157,26 @@ class _TypographySettingsModalState extends State<TypographySettingsModal> {
                       final isSelected = _config.customFontFamily == f.fontFamily;
                       return Padding(
                         padding: const EdgeInsets.only(right: 8),
-                        child: ChoiceChip(
-                          label: Text(f.name),
-                          selected: isSelected,
-                          selectedColor: const Color(0xFF382E25),
-                          labelStyle: TextStyle(
-                            color: isSelected ? Colors.white : Colors.black87,
-                            fontSize: 12,
-                            fontFamily: f.fontFamily,
+                        child: GestureDetector(
+                          onLongPress: () => _confirmDeleteFont(f),
+                          child: InputChip(
+                            label: Text(f.name),
+                            selected: isSelected,
+                            selectedColor: const Color(0xFF382E25),
+                            labelStyle: TextStyle(
+                              color: isSelected ? Colors.white : Colors.black87,
+                              fontSize: 12,
+                              fontFamily: f.fontFamily,
+                            ),
+                            onSelected: (_) => _update(_config.copyWith(customFontFamily: f.fontFamily)),
+                            onDeleted: () => _confirmDeleteFont(f),
+                            deleteIcon: Icon(
+                              Icons.close,
+                              size: 14,
+                              color: isSelected ? Colors.white70 : Colors.black54,
+                            ),
+                            deleteButtonTooltipMessage: '删除字体',
                           ),
-                          onSelected: (_) => _update(_config.copyWith(customFontFamily: f.fontFamily)),
                         ),
                       );
                     }),

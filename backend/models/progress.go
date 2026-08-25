@@ -4,8 +4,8 @@ import "time"
 
 type ReadingProgress struct {
     ID              string    `gorm:"primaryKey;type:varchar(36)" json:"id"`
-    UserID          string    `gorm:"index;type:varchar(36);not null" json:"user_id"`
-    BookID          string    `gorm:"index;type:varchar(64);not null" json:"book_id"`
+    UserID          string    `gorm:"uniqueIndex:idx_progress_user_book;type:varchar(36);not null" json:"user_id"`
+    BookID          string    `gorm:"uniqueIndex:idx_progress_user_book;type:varchar(64);not null" json:"book_id"`
     Title           string    `gorm:"type:varchar(255)" json:"title"`             // 👈 书名
     FilePath        string    `gorm:"type:varchar(512)" json:"file_path"`         // 👈 NAS 远端路径
     Progress        float64   `gorm:"type:real;not null;default:0" json:"progress"`

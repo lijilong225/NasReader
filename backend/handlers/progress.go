@@ -10,6 +10,7 @@ import (
 
     "github.com/gin-gonic/gin"
     "gorm.io/gorm"
+    "gorm.io/gorm/clause"
 )
 
 type SyncProgressRequest struct {
@@ -65,49 +66,12 @@ func SyncProgress(c *gin.Context) {
         return
     }
 
-    var existing models.ReadingProgress
-    err := config.DB.Where("user_id = ? AND book_id = ?", userID, req.BookID).First(&existing).Error
-
-    if err != nil && err != gorm.ErrRecordNotFound {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-        return
-    }
-
-    // 记录已存在时对比时间戳
-    if err == nil {
-        if req.ClientUpdatedAt <= existing.ClientUpdatedAt {
-            c.JSON(http.StatusConflict, gin.H{
-                "message": "Local progress is outdated",
-                "current": existing,
-            })
-            return
-        }
-
-        // 更新记录
-        existing.Title = req.Title
-        existing.FilePath = req.FilePath
-        existing.Progress = req.Progress
-        existing.Locator = req.Locator
-        existing.DeviceID = req.DeviceID
-        existing.DeviceName = req.DeviceName
-        existing.ClientUpdatedAt = req.ClientUpdatedAt
-        existing.UpdatedAt = time.Now()
-
-        if err := config.DB.Save(&existing).Error; err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update progress"})
-            return
-        }
-        c.JSON(http.StatusOK, existing)
-        return
-    }
-
-    // 记录不存在，创建新记录
     randomBytes := make([]byte, 16)
     _, _ = rand.Read(randomBytes)
-    progressID := hex.EncodeToString(randomBytes)
 
-    newProgress := models.ReadingProgress{
-        ID:              progressID,
+    now := time.Now()
+    incoming := models.ReadingProgress{
+        ID:              hex.EncodeToString(randomBytes),
         UserID:          userID,
         BookID:          req.BookID,
         Title:           req.Title,
@@ -117,13 +81,53 @@ func SyncProgress(c *gin.Context) {
         DeviceID:        req.DeviceID,
         DeviceName:      req.DeviceName,
         ClientUpdatedAt: req.ClientUpdatedAt,
-        UpdatedAt:       time.Now(),
+        UpdatedAt:       now,
     }
 
-    if err := config.DB.Create(&newProgress).Error; err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create progress"})
+    // 单条 upsert：唯一索引 idx_progress_user_book 保证并发首次上报不会插出重复行，
+    // DO UPDATE 的 WHERE 即 LWW 判定，时间戳不够新时 RowsAffected 为 0。
+    result := config.DB.Clauses(clause.OnConflict{
+        Columns: []clause.Column{{Name: "user_id"}, {Name: "book_id"}},
+        DoUpdates: clause.Assignments(map[string]interface{}{
+            "title":             req.Title,
+            "file_path":         req.FilePath,
+            "progress":          req.Progress,
+            "locator":           req.Locator,
+            "device_id":         req.DeviceID,
+            "device_name":       req.DeviceName,
+            "client_updated_at": req.ClientUpdatedAt,
+            "updated_at":        now,
+        }),
+        Where: clause.Where{Exprs: []clause.Expression{
+            clause.Lt{
+                Column: clause.Column{Table: clause.CurrentTable, Name: "client_updated_at"},
+                Value:  req.ClientUpdatedAt,
+            },
+        }},
+    }).Create(&incoming)
+
+    if result.Error != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
         return
     }
 
-    c.JSON(http.StatusCreated, newProgress)
+    var current models.ReadingProgress
+    if err := config.DB.Where("user_id = ? AND book_id = ?", userID, req.BookID).First(&current).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+
+    if result.RowsAffected == 0 {
+        c.JSON(http.StatusConflict, gin.H{
+            "message": "Local progress is outdated",
+            "current": current,
+        })
+        return
+    }
+
+    if current.ID == incoming.ID {
+        c.JSON(http.StatusCreated, current)
+        return
+    }
+    c.JSON(http.StatusOK, current)
 }

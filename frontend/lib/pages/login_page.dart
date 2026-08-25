@@ -81,20 +81,14 @@ class _LoginPageState extends State<LoginPage> {
       
       // 2. 解析用户信息（安全类型转换，避免 as int 崩溃）
       final rawUser = (data['user'] ?? data['data']?['user']) as Map<String, dynamic>?;
-      
-      // 安全提取 ID，兼容 int、double、String 等多种返回类型
-      int parsedId = 1;
-      final rawId = data['userId'] ?? data['user_id'] ?? data['id'];
-      if (rawId is num) {
-        parsedId = rawId.toInt();
-      } else if (rawId is String) {
-        parsedId = int.tryParse(rawId) ?? 1;
-      }
+
+      final fallbackId =
+          (data['userId'] ?? data['user_id'] ?? data['id'] ?? '').toString();
 
       final user = rawUser != null
           ? AuthUser.fromJson(rawUser)
           : AuthUser(
-              id: parsedId, // 👈 使用安全解析后的 ID
+              id: fallbackId,
               username: username,
             );
 

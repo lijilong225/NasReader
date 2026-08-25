@@ -7,7 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 // lib/config/api_config.dart 中的 AuthUser
 class AuthUser {
-  final int id;
+  final String id;
   final String username;
   final String? email;
   final String? nickname;
@@ -27,17 +27,11 @@ class AuthUser {
   };
 
   factory AuthUser.fromJson(Map<String, dynamic> json) {
-    // 兼容 String / num 两种格式的 id
-    final rawId = json['id'] ?? json['user_id'] ?? json['userId'] ?? 0;
-    int parsedId = 0;
-    if (rawId is num) {
-      parsedId = rawId.toInt();
-    } else if (rawId is String) {
-      parsedId = int.tryParse(rawId) ?? 0;
-    }
+    // 后端 user_id 是 32 位随机 hex，不能按数字解析
+    final rawId = json['id'] ?? json['user_id'] ?? json['userId'] ?? '';
 
     return AuthUser(
-      id: parsedId,
+      id: rawId.toString(),
       username: (json['username'] ?? '').toString(),
       email: json['email']?.toString(),
       nickname: json['nickname']?.toString(),

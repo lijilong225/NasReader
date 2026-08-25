@@ -33,7 +33,10 @@ func InitDB() {
 		log.Fatalf("连接 SQLite 数据库失败: %v", err)
 	}
 
-	// 3. 自动迁移数据表结构（增加 models.Bookmark）
+	// 3. 建唯一索引前先清理历史重复行，否则 AutoMigrate 会失败
+	dedupeReadingProgress()
+
+	// 4. 自动迁移数据表结构（增加 models.Bookmark）
 	err = DB.AutoMigrate(
 		&models.User{},
 		&models.ReadingProgress{},
@@ -44,4 +47,33 @@ func InitDB() {
 	}
 
 	log.Printf("SQLite 数据库初始化成功 (存储路径: %s)", dbFile)
+}
+
+// dedupeReadingProgress 对同一 (user_id, book_id) 只保留 client_updated_at 最大的一行。
+// 老版本缺唯一索引时可能已写入重复行，直接建索引会报 UNIQUE constraint failed。
+func dedupeReadingProgress() {
+	if !DB.Migrator().HasTable(&models.ReadingProgress{}) {
+		return
+	}
+
+	result := DB.Exec(`
+		DELETE FROM reading_progresses
+		WHERE id NOT IN (
+			SELECT id FROM (
+				SELECT id FROM reading_progresses AS p
+				WHERE p.rowid = (
+					SELECT q.rowid FROM reading_progresses AS q
+					WHERE q.user_id = p.user_id AND q.book_id = p.book_id
+					ORDER BY q.client_updated_at DESC, q.rowid DESC
+					LIMIT 1
+				)
+			)
+		)`)
+	if result.Error != nil {
+		log.Printf("清理 reading_progresses 重复行失败: %v", result.Error)
+		return
+	}
+	if result.RowsAffected > 0 {
+		log.Printf("已清理 %d 条重复的阅读进度记录（保留时间戳最新的一条）", result.RowsAffected)
+	}
 }

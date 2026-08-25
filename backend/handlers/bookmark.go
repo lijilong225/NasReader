@@ -5,10 +5,16 @@ import (
 	"net/http"
 	"reader-sync/config"
 	"reader-sync/models"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// bookmarkTombstoneTTL 软删除书签的墓碑保留时长。
+// 保留期内墓碑会继续同步给其它设备以传播删除；超期后物理清除，避免无限膨胀。
+// 离线超过该时长的设备重新同步时，其本地未删除副本可能被复活，这是可接受的取舍。
+const bookmarkTombstoneTTL = 30 * 24 * time.Hour
 
 func SyncBookmarks(c *gin.Context) {
 	userID := c.GetString("user_id")
@@ -26,6 +32,14 @@ func SyncBookmarks(c *gin.Context) {
 	db := config.DB
 
 	err := db.Transaction(func(tx *gorm.DB) error {
+		// 先物理清除超过保留期的墓碑，防止软删记录在两端无限累积
+		expireBefore := time.Now().Add(-bookmarkTombstoneTTL).UnixMilli()
+		if err := tx.Where("user_id = ? AND book_id = ? AND is_deleted = ? AND updated_at < ?",
+			userID, req.BookID, true, expireBefore).
+			Delete(&models.Bookmark{}).Error; err != nil {
+			return err
+		}
+
 		var serverBookmarks []models.Bookmark
 		if err := tx.Where("user_id = ? AND book_id = ?", userID, req.BookID).Find(&serverBookmarks).Error; err != nil {
 			return err
@@ -42,6 +56,10 @@ func SyncBookmarks(c *gin.Context) {
 
 			serverB, exist := serverMap[clientB.ID]
 			if !exist {
+				// 已过保留期的墓碑不再重新入库
+				if clientB.IsDeleted && clientB.UpdatedAt < expireBefore {
+					continue
+				}
 				if err := tx.Create(&clientB).Error; err != nil {
 					return err
 				}

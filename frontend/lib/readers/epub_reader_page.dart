@@ -160,11 +160,8 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   void _jumpToEpubBookmark(Bookmark b) {
     Navigator.pop(context);
     if (b.cfi != null && b.cfi!.isNotEmpty) {
-      final safeCfi = b.cfi!
-          .replaceAll(r'\', r'\\')
-          .replaceAll("'", r"\'")
-          .replaceAll('"', r'\"');
-      _webViewController.runJavaScript("window.goToCfi('$safeCfi');");
+      // CFI 来自 EPUB 内容而非可信源，用 jsonEncode 生成字面量，避免换行等字符破坏语句
+      _webViewController.runJavaScript('window.goToCfi(${jsonEncode(b.cfi)});');
     }
   }
 
@@ -510,13 +507,8 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
       Navigator.of(context).pop();
     }
 
-    final safeHref = href
-        .trim()
-        .replaceAll(r'\', r'\\')
-        .replaceAll("'", r"\'")
-        .replaceAll('"', r'\"');
-
-    _webViewController.runJavaScript("window.goToHref('$safeHref');");
+    // href 取自 EPUB 目录，同样按 JSON 字面量传入
+    _webViewController.runJavaScript('window.goToHref(${jsonEncode(href.trim())});');
   }
 
   void _applyTheme(Color bg, Color text) {

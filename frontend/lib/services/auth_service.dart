@@ -10,7 +10,7 @@ class AuthService {
     // 兼容旧接口，直接写入 ApiConfig
     await ApiConfig.onLoginSuccess(
       token: token,
-      user: ApiConfig.currentUser ?? AuthUser(id: 1, username: 'User'),
+      user: ApiConfig.currentUser ?? const AuthUser(id: '', username: 'User'),
     );
   }
 

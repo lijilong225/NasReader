@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:nas_reader/config/api_config.dart';
@@ -27,6 +28,29 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
   String _cacheSizeStr = '计算中...';
   bool _isClearing = false;
   bool _isCalculating = false;
+
+  // release 包的隐藏入口：连点“存储与诊断”标题解锁日志面板
+  static const _unlockTapCount = 5;
+  static const _unlockTapGap = Duration(seconds: 2);
+  bool _diagnosticsUnlocked = false;
+  int _secretTaps = 0;
+  DateTime? _lastSecretTap;
+
+  void _handleSecretTap() {
+    if (_diagnosticsUnlocked) return;
+
+    final now = DateTime.now();
+    final last = _lastSecretTap;
+    _secretTaps = (last == null || now.difference(last) > _unlockTapGap) ? 1 : _secretTaps + 1;
+    _lastSecretTap = now;
+
+    if (_secretTaps < _unlockTapCount) return;
+
+    setState(() => _diagnosticsUnlocked = true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已开启网络诊断日志')),
+    );
+  }
 
   @override
   void initState() {
@@ -323,9 +347,13 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
             const Divider(),
 
             // 3. 存储与诊断
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text('存储与诊断', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _handleSecretTap,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text('存储与诊断', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+              ),
             ),
             ListTile(
               leading: const Icon(Icons.cleaning_services_outlined),
@@ -340,13 +368,15 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
                   : const Icon(Icons.chevron_right),
               onTap: _isClearing ? null : _clearCache,
             ),
-            ListTile(
-              leading: const Icon(Icons.receipt_long_outlined),
-              title: const Text('查看网络诊断日志'),
-              subtitle: const Text('抓包与 API 调试'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => AppLogger.showLogModal(context),
-            ),
+            // 诊断日志含请求地址与错误详情，release 包需连点标题 5 次解锁
+            if (kDebugMode || _diagnosticsUnlocked)
+              ListTile(
+                leading: const Icon(Icons.receipt_long_outlined),
+                title: const Text('查看网络诊断日志'),
+                subtitle: const Text('抓包与 API 调试'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => AppLogger.showLogModal(context),
+              ),
             const Divider(),
 
             // 4. 关于

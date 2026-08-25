@@ -181,6 +181,10 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
       final bytes = await widget.file.readAsBytes();
       final base64Epub = base64Encode(bytes);
 
+      // 渲染库从应用资源读取，不再依赖外部 CDN
+      final jsZipSource = await rootBundle.loadString('assets/js/jszip.min.js');
+      final epubJsSource = await rootBundle.loadString('assets/js/epub.min.js');
+
       _webViewController = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(const Color(0xFFF6EFE2))
@@ -205,7 +209,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
         AndroidWebViewController.enableDebugging(true);
       }
 
-      final html = _buildEpubViewerHtml(base64Epub, widget.initialCfi);
+      final html = _buildEpubViewerHtml(base64Epub, widget.initialCfi, jsZipSource, epubJsSource);
       await _webViewController.loadHtmlString(html, baseUrl: 'https://localhost/');
     } catch (e) {
       setState(() {
@@ -259,9 +263,14 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     } catch (_) {}
   }
 
-  String _buildEpubViewerHtml(String base64Epub, String? startCfi) {
+  String _buildEpubViewerHtml(
+    String base64Epub,
+    String? startCfi,
+    String jsZipSource,
+    String epubJsSource,
+  ) {
     final initialLocation = (startCfi != null && startCfi.isNotEmpty)
-        ? "'$startCfi'"
+        ? jsonEncode(startCfi)
         : 'undefined';
 
     return '''
@@ -270,8 +279,8 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.88/dist/epub.min.js"></script>
+  <script>$jsZipSource</script>
+  <script>$epubJsSource</script>
   <style>
     * { 
       margin: 0; 

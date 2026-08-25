@@ -9,10 +9,9 @@ import '../services/app_logger.dart';
 class BookmarkSyncService {
   static const String _localPrefix = 'local_bookmarks_';
 
-  /// 获取本地保存的 JWT Token
+  /// 获取本地保存的 JWT Token（统一走 ApiConfig 的安全存储）
   static Future<String?> _getAuthToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('auth_token');
+    return ApiConfig.readAuthToken();
   }
 
   /// 获取某本书的本地有效书签

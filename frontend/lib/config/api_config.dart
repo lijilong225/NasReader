@@ -2,6 +2,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // lib/config/api_config.dart 中的 AuthUser
@@ -49,6 +50,11 @@ class ApiConfig {
   static const String _keyAuthToken = 'auth_token';
   static const String _keyUserInfo = 'auth_user_info';
 
+  /// Token 改用系统钥匙串 / Android Keystore 存储，避免明文落在 SharedPreferences
+  static const FlutterSecureStorage _secureStorage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+
   static String _baseUrl = _defaultBaseUrl;
   static String? _authToken;
   static AuthUser? _currentUser;
@@ -81,7 +87,7 @@ class ApiConfig {
   static Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     _baseUrl = prefs.getString(_keyBaseUrl) ?? _defaultBaseUrl;
-    _authToken = prefs.getString(_keyAuthToken);
+    _authToken = await _loadToken(prefs);
 
     final rawUser = prefs.getString(_keyUserInfo);
     if (rawUser != null && rawUser.isNotEmpty) {
@@ -93,6 +99,38 @@ class ApiConfig {
     }
 
     isLoggedInNotifier.value = isLoggedIn;
+  }
+
+  /// 读取 Token：优先安全存储，并把历史遗留的明文 Token 迁移过去后清除
+  static Future<String?> _loadToken(SharedPreferences prefs) async {
+    String? token;
+    try {
+      token = await _secureStorage.read(key: _keyAuthToken);
+    } catch (e) {
+      debugPrint('⚠️ 安全存储读取失败: $e');
+    }
+    if (token != null && token.isNotEmpty) return token;
+
+    final legacy = prefs.getString(_keyAuthToken);
+    if (legacy != null && legacy.isNotEmpty) {
+      try {
+        await _secureStorage.write(key: _keyAuthToken, value: legacy);
+        await prefs.remove(_keyAuthToken);
+      } catch (e) {
+        debugPrint('⚠️ Token 迁移到安全存储失败: $e');
+        return legacy;
+      }
+      return legacy;
+    }
+    return null;
+  }
+
+  /// 供其它服务读取 Token（内存未命中时回落到安全存储）
+  static Future<String?> readAuthToken() async {
+    if (_authToken != null && _authToken!.isNotEmpty) return _authToken;
+    final prefs = await SharedPreferences.getInstance();
+    _authToken = await _loadToken(prefs);
+    return _authToken;
   }
 
   /// 动态更新服务器地址
@@ -115,7 +153,8 @@ class ApiConfig {
     _currentUser = user;
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_keyAuthToken, token);
+    await _secureStorage.write(key: _keyAuthToken, value: token);
+    await prefs.remove(_keyAuthToken); // 清理历史明文残留
     await prefs.setString(_keyUserInfo, jsonEncode(user.toJson()));
 
     isLoggedInNotifier.value = true;
@@ -127,6 +166,11 @@ class ApiConfig {
     _currentUser = null;
 
     final prefs = await SharedPreferences.getInstance();
+    try {
+      await _secureStorage.delete(key: _keyAuthToken);
+    } catch (e) {
+      debugPrint('⚠️ 安全存储清除 Token 失败: $e');
+    }
     await prefs.remove(_keyAuthToken);
     await prefs.remove(_keyUserInfo);
 

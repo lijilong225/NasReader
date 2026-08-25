@@ -5,7 +5,7 @@ class AuthService {
   static Future<String?> getBaseUrl() async => ApiConfig.baseUrl;
   static Future<void> saveBaseUrl(String url) async => ApiConfig.setBaseUrl(url);
 
-  static Future<String?> getToken() async => ApiConfig.authToken;
+  static Future<String?> getToken() async => ApiConfig.readAuthToken();
   static Future<void> saveToken(String token) async {
     // 兼容旧接口，直接写入 ApiConfig
     await ApiConfig.onLoginSuccess(

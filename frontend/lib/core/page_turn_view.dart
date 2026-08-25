@@ -145,7 +145,13 @@ class PageTurnViewState extends State<PageTurnView> with SingleTickerProviderSta
     return Stack(
       fit: StackFit.expand,
       children: [
-        if (underPage != null) underPage,
+        // 1. 底层页面（保持 100% 不透明物理实体）
+        if (underPage != null)
+          Positioned.fill(
+            child: underPage,
+          ),
+
+        // 2. 当前顶层页面（纯物理平移，不改变透明度）
         Transform.translate(
           offset: Offset(_dragOffset, 0),
           child: Container(
@@ -153,10 +159,10 @@ class PageTurnViewState extends State<PageTurnView> with SingleTickerProviderSta
               boxShadow: [
                 if (_dragOffset != 0.0)
                   BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.25),
-                    blurRadius: 14.0,
+                    color: Colors.black.withValues(alpha: 0.3),
+                    blurRadius: 16.0,
                     spreadRadius: 1.0,
-                    offset: Offset(_dragOffset < 0 ? 6.0 : -6.0, 0),
+                    offset: Offset(_dragOffset < 0 ? 8.0 : -8.0, 0),
                   ),
               ],
             ),

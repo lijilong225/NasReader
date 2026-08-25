@@ -677,97 +677,100 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       }
     }
 
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: kHorizontalPadding,
-          vertical: kVerticalPadding,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 顶部小字章节提示
-            SizedBox(
-              height: kHeaderHeight,
-              child: Text(
-                currentChapterTitle,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: _currentTheme.textColor.withValues(alpha: 0.5),
+    return Container(
+      color: _currentTheme.bgColor,
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: kHorizontalPadding,
+            vertical: kVerticalPadding,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 顶部小字章节提示
+              SizedBox(
+                height: kHeaderHeight,
+                child: Text(
+                  currentChapterTitle,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: _currentTheme.textColor.withValues(alpha: 0.5),
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
-                overflow: TextOverflow.ellipsis,
               ),
-            ),
-            const SizedBox(height: kHeaderSpacing),
+              const SizedBox(height: kHeaderSpacing),
 
-            // 正文区域
-            Expanded(
-              child: Align(
-                alignment: Alignment.topLeft,
-                child: Text.rich(
-                  TextSpan(
-                    children: [
-                      // 1. 章节大标题
-                      if (hasChapterHeader)
+              // 正文区域
+              Expanded(
+                child: Align(
+                  alignment: Alignment.topLeft,
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        // 1. 章节大标题
+                        if (hasChapterHeader)
+                          TextSpan(
+                            text: '${slice.chapterTitle!}\n',
+                            style: TextStyle(
+                              fontSize: _typoConfig.fontSize * 1.25,
+                              fontWeight: FontWeight.bold,
+                              height: 1.4,
+                              letterSpacing: _typoConfig.letterSpacing + 0.5,
+                              fontFamily: _typoConfig.customFontFamily ?? 'serif',
+                              color: _currentTheme.textColor,
+                            ),
+                          ),
+                        // 2. 正文内容
                         TextSpan(
-                          text: '${slice.chapterTitle!}\n',
+                          text: cleanContent,
                           style: TextStyle(
-                            fontSize: _typoConfig.fontSize * 1.25,
-                            fontWeight: FontWeight.bold,
-                            height: 1.4,
-                            letterSpacing: _typoConfig.letterSpacing + 0.5,
+                            fontSize: _typoConfig.fontSize,
+                            height: _typoConfig.lineHeight,
+                            letterSpacing: _typoConfig.letterSpacing,
                             fontFamily: _typoConfig.customFontFamily ?? 'serif',
                             color: _currentTheme.textColor,
                           ),
                         ),
-                      // 2. 正文内容
-                      TextSpan(
-                        text: cleanContent,
-                        style: TextStyle(
-                          fontSize: _typoConfig.fontSize,
-                          height: _typoConfig.lineHeight,
-                          letterSpacing: _typoConfig.letterSpacing,
-                          fontFamily: _typoConfig.customFontFamily ?? 'serif',
-                          color: _currentTheme.textColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                  strutStyle: StrutStyle(
-                    fontSize: _typoConfig.fontSize,
-                    height: _typoConfig.lineHeight,
-                    forceStrutHeight: false,
+                      ],
+                    ),
+                    strutStyle: StrutStyle(
+                      fontSize: _typoConfig.fontSize,
+                      height: _typoConfig.lineHeight,
+                      forceStrutHeight: false,
+                    ),
                   ),
                 ),
               ),
-            ),
 
-            // 底部页码与总进度
-            SizedBox(
-              height: kFooterHeight,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    '${pageIndex + 1} / $totalPages',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: _currentTheme.textColor.withValues(alpha: 0.5),
+              // 底部页码与总进度
+              SizedBox(
+                height: kFooterHeight,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '${pageIndex + 1} / $totalPages',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: _currentTheme.textColor.withValues(alpha: 0.5),
+                      ),
                     ),
-                  ),
-                  Text(
-                    '${(slice.endByteOffset / _totalFileSize * 100).toStringAsFixed(1)}%',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: _currentTheme.textColor.withValues(alpha: 0.5),
+                    Text(
+                      '${(slice.endByteOffset / _totalFileSize * 100).toStringAsFixed(1)}%',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: _currentTheme.textColor.withValues(alpha: 0.5),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
+     ),
     );
   }
 }

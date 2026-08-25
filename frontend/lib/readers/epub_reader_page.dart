@@ -62,7 +62,7 @@ class EpubReaderPage extends StatefulWidget {
   State<EpubReaderPage> createState() => _EpubReaderPageState();
 }
 
-class _EpubReaderPageState extends State<EpubReaderPage> with SingleTickerProviderStateMixin {
+class _EpubReaderPageState extends State<EpubReaderPage> {
   late final WebViewController _webViewController;
 
   bool _isLoading = true;
@@ -76,12 +76,10 @@ class _EpubReaderPageState extends State<EpubReaderPage> with SingleTickerProvid
   HandMode _handMode = HandMode.standard;
   TypographyConfig _typoConfig = const TypographyConfig();
 
-  // 翻页状态与动画控制
+  // 手势拖拽与瞬切状态
   bool _isTurningPage = false;
   double _dragOffset = 0.0;
   bool _isDragging = false;
-  late AnimationController _animController;
-  Animation<double>? _slideAnimation;
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
@@ -90,10 +88,6 @@ class _EpubReaderPageState extends State<EpubReaderPage> with SingleTickerProvid
     super.initState();
     _currentCfi = widget.initialCfi ?? '';
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    _animController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 220),
-    );
     _loadHandMode();
     _loadBookmarks();
     _initWebView();
@@ -101,7 +95,6 @@ class _EpubReaderPageState extends State<EpubReaderPage> with SingleTickerProvid
 
   @override
   void dispose() {
-    _animController.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
@@ -288,11 +281,23 @@ class _EpubReaderPageState extends State<EpubReaderPage> with SingleTickerProvid
       user-select: none;
       -webkit-user-select: none;
     }
-    html, body, #viewer { width: 100vw; height: 100vh; overflow: hidden; background: #F6EFE2; }
+    html, body { width: 100vw; height: 100vh; overflow: hidden; background: #F6EFE2; }
+    #wrapper {
+      width: 100vw;
+      height: 100vh;
+      position: absolute;
+      top: 0;
+      left: 0;
+      will-change: transform;
+      background: #F6EFE2;
+    }
+    #viewer { width: 100%; height: 100%; }
   </style>
 </head>
 <body>
-  <div id="viewer"></div>
+  <div id="wrapper">
+    <div id="viewer"></div>
+  </div>
   <script>
     window.onerror = function(msg, url, line) {
       FlutterChannel.postMessage(JSON.stringify({
@@ -310,6 +315,8 @@ class _EpubReaderPageState extends State<EpubReaderPage> with SingleTickerProvid
       }
       return bytes.buffer;
     }
+
+    const wrapper = document.getElementById("wrapper");
 
     try {
       const base64Data = "$base64Epub";
@@ -353,7 +360,6 @@ class _EpubReaderPageState extends State<EpubReaderPage> with SingleTickerProvid
         }));
       });
 
-      // 彻底禁用 webview 内部事件穿透，完全交由 Flutter 层九宫格引擎统一分流调度
       rendition.on("rendered", function(section, iframeView) {
         const iframeDoc = iframeView.document;
         if (!iframeDoc) return;
@@ -363,6 +369,34 @@ class _EpubReaderPageState extends State<EpubReaderPage> with SingleTickerProvid
           e.stopPropagation();
         }, true);
       });
+
+      // 原生 DOM 平移与无缝切换引擎（杜绝白屏与回跳闪烁）
+      window.setSlideOffset = function(dx) {
+        wrapper.style.transition = "none";
+        wrapper.style.transform = "translateX(" + dx + "px)";
+      };
+
+      window.finishSlide = function(action, targetDx) {
+        wrapper.style.transition = "transform 0.22s cubic-bezier(0.25, 1, 0.5, 1)";
+        wrapper.style.transform = "translateX(" + targetDx + "px)";
+
+        setTimeout(function() {
+          if (action === 'next') {
+            rendition.next().then(function() {
+              wrapper.style.transition = "none";
+              wrapper.style.transform = "translateX(0px)";
+            });
+          } else if (action === 'prev') {
+            rendition.prev().then(function() {
+              wrapper.style.transition = "none";
+              wrapper.style.transform = "translateX(0px)";
+            });
+          } else {
+            wrapper.style.transition = "none";
+            wrapper.style.transform = "translateX(0px)";
+          }
+        }, 220);
+      };
 
       window.nextPage = () => rendition.next();
       window.prevPage = () => rendition.prev();
@@ -392,6 +426,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> with SingleTickerProvid
 
       window.setTheme = (bgColor, textColor) => {
         document.body.style.background = bgColor;
+        wrapper.style.background = bgColor;
         rendition.themes.default({
           'body': { 'background': bgColor + ' !important', 'color': textColor + ' !important' },
           'p': { 'color': textColor + ' !important' }
@@ -411,7 +446,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> with SingleTickerProvid
     if (_isTurningPage) return;
     _isTurningPage = true;
     _webViewController.runJavaScript('window.nextPage();');
-    Future.delayed(const Duration(milliseconds: 100), () {
+    Future.delayed(const Duration(milliseconds: 120), () {
       if (mounted) _isTurningPage = false;
     });
   }
@@ -420,62 +455,43 @@ class _EpubReaderPageState extends State<EpubReaderPage> with SingleTickerProvid
     if (_isTurningPage) return;
     _isTurningPage = true;
     _webViewController.runJavaScript('window.prevPage();');
-    Future.delayed(const Duration(milliseconds: 100), () {
+    Future.delayed(const Duration(milliseconds: 120), () {
       if (mounted) _isTurningPage = false;
     });
   }
 
-  // --- 手势滑动跟手与整页平移动画逻辑 ---
+  // --- 手势滑动跟手透传 ---
 
   void _handleHorizontalDragStart(DragStartDetails details) {
-    if (_animController.isAnimating) _animController.stop();
     _isDragging = true;
   }
 
   void _handleHorizontalDragUpdate(DragUpdateDetails details) {
     if (!_isDragging) return;
-    setState(() {
-      _dragOffset += details.primaryDelta ?? 0.0;
-    });
+    _dragOffset += details.primaryDelta ?? 0.0;
+    _webViewController.runJavaScript('window.setSlideOffset($_dragOffset);');
   }
 
   void _handleHorizontalDragEnd(DragEndDetails details, double screenWidth) {
+    if (!_isDragging) return;
     _isDragging = false;
-    final velocity = details.primaryVelocity ?? 0.0;
 
+    final velocity = details.primaryVelocity ?? 0.0;
     final bool reachDistanceThreshold = _dragOffset.abs() > (screenWidth * 0.20);
     final bool reachVelocityThreshold = velocity.abs() > 300.0;
     final bool canFlip = reachDistanceThreshold || reachVelocityThreshold;
 
     final bool isNext = _dragOffset < 0;
-    double targetEndOffset = 0.0;
 
     if (canFlip) {
-      targetEndOffset = isNext ? -screenWidth : screenWidth;
+      final targetDx = isNext ? -screenWidth : screenWidth;
+      final action = isNext ? 'next' : 'prev';
+      _webViewController.runJavaScript("window.finishSlide('$action', $targetDx);");
     } else {
-      targetEndOffset = 0.0; // 回弹
+      _webViewController.runJavaScript("window.finishSlide('cancel', 0);");
     }
 
-    _slideAnimation = Tween<double>(begin: _dragOffset, end: targetEndOffset).animate(
-      CurvedAnimation(parent: _animController, curve: Curves.easeOutCubic),
-    )..addListener(() {
-        setState(() {
-          _dragOffset = _slideAnimation!.value;
-        });
-      });
-
-    _animController.forward(from: 0.0).then((_) {
-      if (canFlip) {
-        if (isNext) {
-          _webViewController.runJavaScript('window.nextPage();');
-        } else {
-          _webViewController.runJavaScript('window.prevPage();');
-        }
-      }
-      setState(() {
-        _dragOffset = 0.0;
-      });
-    });
+    _dragOffset = 0.0;
   }
 
   void _jumpToHref(String href) {
@@ -611,23 +627,10 @@ class _EpubReaderPageState extends State<EpubReaderPage> with SingleTickerProvid
       ),
       body: Stack(
         children: [
-          // 1. 底层 WebView 视图（支持跟手平移与边缘阴影）
-          Transform.translate(
-            offset: Offset(_dragOffset, 0),
-            child: Container(
-              decoration: BoxDecoration(
-                boxShadow: [
-                  if (_dragOffset != 0.0)
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.25),
-                      blurRadius: 14.0,
-                      spreadRadius: 1.0,
-                      offset: Offset(_dragOffset < 0 ? 6.0 : -6.0, 0),
-                    ),
-                ],
-              ),
-              child: WebViewWidget(controller: _webViewController),
-            ),
+          // 1. 底层 WebView 视图（无 Flutter 外层位移，全交由 DOM 内部硬件加速平移）
+          Container(
+            color: const Color(0xFFF6EFE2),
+            child: WebViewWidget(controller: _webViewController),
           ),
 
           // 2. 顶层 3x3 九宫格与水平滑动手势拦截层
@@ -695,7 +698,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> with SingleTickerProvid
               ),
             ),
 
-          // 4. 底部控制条（已移除翻页动画选项）
+          // 4. 底部控制条（已移除翻页效果选项）
           if (_showControls)
             Positioned(
               bottom: 0,

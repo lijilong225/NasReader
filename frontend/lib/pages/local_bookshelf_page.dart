@@ -22,6 +22,9 @@ class BookshelfItem {
   final int? txtByteOffset;
   final DateTime lastReadTime;
 
+  /// 本地缓存文件体积，仅在已下载时有值
+  final int fileSizeBytes;
+
   bool get isDownloaded => localFile != null && localFile!.existsSync();
 
   BookshelfItem({
@@ -35,7 +38,16 @@ class BookshelfItem {
     this.epubCfi,
     this.txtByteOffset,
     required this.lastReadTime,
+    this.fileSizeBytes = 0,
   });
+}
+
+/// 书架体积展示统一走 MB，不足 0.1MB 时降级为 KB 避免显示 0.0MB
+String formatBookSize(int bytes) {
+  if (bytes <= 0) return '';
+  const int mb = 1024 * 1024;
+  if (bytes < mb ~/ 10) return '${(bytes / 1024).toStringAsFixed(0)}KB';
+  return '${(bytes / mb).toStringAsFixed(1)}MB';
 }
 
 class LocalBookshelfPage extends StatefulWidget {
@@ -68,6 +80,16 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       loadLocalBooks();
+    }
+  }
+
+  /// 云端记录对应的本地缓存可能已被清理，statSync 失败时按未知体积处理
+  int _fileSizeOf(File? file) {
+    if (file == null) return 0;
+    try {
+      return file.statSync().size;
+    } catch (_) {
+      return 0;
     }
   }
 
@@ -116,6 +138,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
           epubCfi: pItem.epubCfi,
           txtByteOffset: pItem.txtByteOffset,
           lastReadTime: DateTime.fromMillisecondsSinceEpoch(pItem.clientUpdatedAt),
+          fileSizeBytes: _fileSizeOf(localFile),
         );
       }
 
@@ -125,6 +148,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
           final fileName = BookCacheNaming.extractOriginalName(p.basename(file.path));
           final ext = p.extension(fileName).toLowerCase();
           if (ext == '.txt' || ext == '.epub') {
+            final stat = file.statSync();
             mergedItems[bookId] = BookshelfItem(
               bookId: bookId,
               title: p.basenameWithoutExtension(fileName),
@@ -133,7 +157,8 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
               localFile: file,
               remotePath: '',
               progressPercent: 0.0,
-              lastReadTime: file.statSync().modified,
+              lastReadTime: stat.modified,
+              fileSizeBytes: stat.size,
             );
           }
         }
@@ -383,6 +408,13 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
                 '已读 ${(book.progressPercent * 100).toStringAsFixed(1)}%',
                 style: const TextStyle(fontSize: 12, color: Colors.brown),
               ),
+              if (book.fileSizeBytes > 0) ...[
+                const SizedBox(width: 8),
+                Text(
+                  formatBookSize(book.fileSizeBytes),
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ],
               const SizedBox(width: 8),
               if (!book.isDownloaded)
                 Container(

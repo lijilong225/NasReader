@@ -205,7 +205,7 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text('版本', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                Text('v1.0.0', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                Text('v0.5.6', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
               ],
             ),
           ],

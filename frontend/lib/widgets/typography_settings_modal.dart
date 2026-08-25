@@ -124,7 +124,7 @@ class _TypographySettingsModalState extends State<TypographySettingsModal> {
                         selected: isSelected,
                         selectedColor: const Color(0xFF382E25),
                         labelStyle: TextStyle(
-                          color: isSelected ? Colors.white : Colors.white70,
+                          color: isSelected ? Colors.white : Colors.black87,
                           fontSize: 12,
                           fontFamily: f.fontFamily,
                         ),

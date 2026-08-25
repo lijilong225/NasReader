@@ -544,6 +544,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     TypographySettingsModal.show(
       context,
       config: _typoConfig,
+      showFontSection: false,
       onConfigChanged: (newConfig) {
         setState(() => _typoConfig = newConfig);
         _applyTypographyToEpub(newConfig);

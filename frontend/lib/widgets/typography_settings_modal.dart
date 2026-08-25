@@ -8,17 +8,21 @@ import 'typography_config.dart';
 class TypographySettingsModal extends StatefulWidget {
   final TypographyConfig config;
   final ValueChanged<TypographyConfig> onConfigChanged;
+  /// EPUB 走 WebView 渲染，无法应用 Flutter 注册的字体，需关闭字体选择
+  final bool showFontSection;
 
   const TypographySettingsModal({
     super.key,
     required this.config,
     required this.onConfigChanged,
+    this.showFontSection = true,
   });
 
   static Future<void> show(
     BuildContext context, {
     required TypographyConfig config,
     required ValueChanged<TypographyConfig> onConfigChanged,
+    bool showFontSection = true,
   }) {
     return showModalBottomSheet(
       context: context,
@@ -30,6 +34,7 @@ class TypographySettingsModal extends StatefulWidget {
       builder: (_) => TypographySettingsModal(
         config: config,
         onConfigChanged: onConfigChanged,
+        showFontSection: showFontSection,
       ),
     );
   }
@@ -45,9 +50,11 @@ class _TypographySettingsModalState extends State<TypographySettingsModal> {
   void initState() {
     super.initState();
     _config = widget.config;
-    FontManager.instance.loadSavedFonts().then((_) {
-      if (mounted) setState(() {});
-    });
+    if (widget.showFontSection) {
+      FontManager.instance.loadSavedFonts().then((_) {
+        if (mounted) setState(() {});
+      });
+    }
   }
 
   void _update(TypographyConfig newConfig) {
@@ -88,54 +95,56 @@ class _TypographySettingsModalState extends State<TypographySettingsModal> {
             const SizedBox(height: 16),
 
             // 1. 字体选择与导入
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('字体选择', style: TextStyle(color: Colors.white70, fontSize: 13)),
-                TextButton.icon(
-                  onPressed: _pickAndImportFont,
-                  icon: const Icon(Icons.add, size: 16, color: Colors.blueAccent),
-                  label: const Text('导入字体 (.ttf/.otf)', style: TextStyle(color: Colors.blueAccent, fontSize: 12)),
-                ),
-              ],
-            ),
-            SizedBox(
-              height: 36,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
+            if (widget.showFontSection) ...[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  ChoiceChip(
-                    label: const Text('系统默认'),
-                    selected: _config.customFontFamily == null,
-                    selectedColor: const Color(0xFF382E25),
-                    labelStyle: TextStyle(
-                      color: _config.customFontFamily == null ? Colors.white : Colors.white70,
-                      fontSize: 12,
-                    ),
-                    onSelected: (_) => _update(_config.copyWith(clearFont: true)),
+                  const Text('字体选择', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                  TextButton.icon(
+                    onPressed: _pickAndImportFont,
+                    icon: const Icon(Icons.add, size: 16, color: Colors.blueAccent),
+                    label: const Text('导入字体 (.ttf/.otf)', style: TextStyle(color: Colors.blueAccent, fontSize: 12)),
                   ),
-                  const SizedBox(width: 8),
-                  ...FontManager.instance.fonts.map((f) {
-                    final isSelected = _config.customFontFamily == f.fontFamily;
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: ChoiceChip(
-                        label: Text(f.name),
-                        selected: isSelected,
-                        selectedColor: const Color(0xFF382E25),
-                        labelStyle: TextStyle(
-                          color: isSelected ? Colors.white : Colors.black87,
-                          fontSize: 12,
-                          fontFamily: f.fontFamily,
-                        ),
-                        onSelected: (_) => _update(_config.copyWith(customFontFamily: f.fontFamily)),
-                      ),
-                    );
-                  }),
                 ],
               ),
-            ),
-            const Divider(color: Colors.white24, height: 24),
+              SizedBox(
+                height: 36,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: [
+                    ChoiceChip(
+                      label: const Text('系统默认'),
+                      selected: _config.customFontFamily == null,
+                      selectedColor: const Color(0xFF382E25),
+                      labelStyle: TextStyle(
+                        color: _config.customFontFamily == null ? Colors.white : Colors.white70,
+                        fontSize: 12,
+                      ),
+                      onSelected: (_) => _update(_config.copyWith(clearFont: true)),
+                    ),
+                    const SizedBox(width: 8),
+                    ...FontManager.instance.fonts.map((f) {
+                      final isSelected = _config.customFontFamily == f.fontFamily;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: ChoiceChip(
+                          label: Text(f.name),
+                          selected: isSelected,
+                          selectedColor: const Color(0xFF382E25),
+                          labelStyle: TextStyle(
+                            color: isSelected ? Colors.white : Colors.black87,
+                            fontSize: 12,
+                            fontFamily: f.fontFamily,
+                          ),
+                          onSelected: (_) => _update(_config.copyWith(customFontFamily: f.fontFamily)),
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+              const Divider(color: Colors.white24, height: 24),
+            ],
 
             // 2. 行高与字间距滑块
             Row(

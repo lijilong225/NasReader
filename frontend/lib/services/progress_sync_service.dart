@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/api_config.dart';
+import '../core/network_client.dart';
 import 'app_logger.dart';
 
 class BookProgress {
@@ -22,6 +24,12 @@ class BookProgress {
     required this.locator,
     required this.clientUpdatedAt,
   });
+
+  /// bookId 是文件指纹，本地缓存文件名需从远端路径推导
+  String get fileName {
+    final base = p.basename(filePath);
+    return base.isNotEmpty && base != '/' ? base : bookId;
+  }
 
   int? get txtByteOffset {
     if (locator.isEmpty) return 0;
@@ -75,18 +83,9 @@ class ProgressSyncService {
   static const String _storageKey = 'local_reading_progress_map';
   static String? _cachedDeviceId;
 
-  /// 基于 ApiConfig 自动创建或配置 Dio 实例
+  /// 未显式传入时复用 NetworkClient 单例，确保 Token 与 401 拦截器生效
   static Dio _getDio([Dio? customDio]) {
-    if (customDio != null) return customDio;
-
-    return Dio(
-      BaseOptions(
-        baseUrl: ApiConfig.baseUrl,
-        connectTimeout: const Duration(seconds: 5),
-        receiveTimeout: const Duration(seconds: 5),
-        headers: ApiConfig.authHeaders,
-      ),
-    );
+    return customDio ?? NetworkClient.getDio();
   }
 
   static Future<String> _getDeviceId() async {
@@ -249,6 +248,43 @@ class ProgressSyncService {
       } catch (e) {
         AppLogger.log('⚠️ 远端数据清除请求异常: $e');
       }
+    }
+  }
+
+  /// 6. 旧版本以“文件名”作为 bookId，新版本改用后端文件指纹。
+  /// 首次以指纹打开某本书时，把仅存在旧键的记录迁移到新键，避免进度丢失。
+  static Future<void> migrateLegacyBookId({
+    required String legacyBookId,
+    required String newBookId,
+  }) async {
+    if (legacyBookId == newBookId) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final rawMap = prefs.getString(_storageKey);
+    if (rawMap != null) {
+      final Map<String, dynamic> map = jsonDecode(rawMap);
+      if (map.containsKey(legacyBookId) && !map.containsKey(newBookId)) {
+        final legacy = BookProgress.fromJson(map[legacyBookId]);
+        map[newBookId] = BookProgress(
+          bookId: newBookId,
+          title: legacy.title,
+          filePath: legacy.filePath,
+          progress: legacy.progress,
+          locator: legacy.locator,
+          clientUpdatedAt: legacy.clientUpdatedAt,
+        ).toJson();
+        map.remove(legacyBookId);
+        await prefs.setString(_storageKey, jsonEncode(map));
+        AppLogger.log('🔀 已迁移旧阅读进度: $legacyBookId -> $newBookId');
+      }
+    }
+
+    final legacyBookmarks = prefs.getString('local_bookmarks_$legacyBookId');
+    if (legacyBookmarks != null &&
+        prefs.getString('local_bookmarks_$newBookId') == null) {
+      await prefs.setString('local_bookmarks_$newBookId', legacyBookmarks);
+      await prefs.remove('local_bookmarks_$legacyBookId');
+      AppLogger.log('🔀 已迁移旧书签: $legacyBookId -> $newBookId');
     }
   }
 }

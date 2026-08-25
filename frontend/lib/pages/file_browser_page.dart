@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
+import 'package:nas_reader/core/book_fingerprint.dart';
 import 'package:nas_reader/core/network_client.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -61,6 +62,13 @@ class NasFileItem {
       modTime: modTime,
     );
   }
+
+  /// 同步用书籍唯一标识：优先使用后端文件指纹，缺失时退化为文件名
+  String get syncBookId => (bookId != null && bookId!.isNotEmpty) ? bookId! : name;
+
+  /// 本地缓存文件名，带指纹前缀以避免同名书籍互相覆盖
+  String get cacheFileName =>
+      BookCacheNaming.buildFileName(bookId: bookId, originalName: name);
 }
 
 class FileBrowserPage extends StatefulWidget {
@@ -175,6 +183,11 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     }
   }
 
+  /// 新命名（带指纹前缀）与旧命名（纯文件名）都视为已缓存
+  bool _isItemCached(NasFileItem item) =>
+      _cachedFileNames.contains(item.cacheFileName) ||
+      _cachedFileNames.contains(item.name);
+
   Future<void> _loadDirectory(String targetPath) async {
     setState(() {
       _isLoading = true;
@@ -228,6 +241,27 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     }
   }
 
+  /// 定位书籍的本地缓存文件：优先带指纹前缀的新命名，
+  /// 若只存在旧版无前缀文件则就地重命名迁移。
+  Future<File> _resolveLocalFile(NasFileItem item) async {
+    final appDir = await getApplicationDocumentsDirectory();
+    final booksDir = p.join(appDir.path, 'books');
+    final target = File(p.join(booksDir, item.cacheFileName));
+
+    if (target.existsSync() || item.cacheFileName == item.name) return target;
+
+    final legacy = File(p.join(booksDir, item.name));
+    if (legacy.existsSync() && legacy.lengthSync() > 0) {
+      try {
+        return await legacy.rename(target.path);
+      } catch (e) {
+        AppLogger.log('❌ 迁移旧缓存文件失败，继续沿用旧文件: $e');
+        return legacy;
+      }
+    }
+    return target;
+  }
+
   Future<void> _handleItemTap(NasFileItem item) async {
     if (item.isDir) {
       _loadDirectory(item.path);
@@ -242,9 +276,8 @@ class FileBrowserPageState extends State<FileBrowserPage> {
       return;
     }
 
-    final appDir = await getApplicationDocumentsDirectory();
-    final localFilePath = p.join(appDir.path, 'books', item.name);
-    final targetFile = File(localFilePath);
+    final targetFile = await _resolveLocalFile(item);
+    final localFilePath = targetFile.path;
 
     if (targetFile.existsSync() && targetFile.lengthSync() > 0) {
       _openReader(targetFile, item);
@@ -340,7 +373,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
       }
 
       setState(() {
-        _cachedFileNames.add(item.name);
+        _cachedFileNames.add(p.basename(localFilePath));
       });
 
       if (mounted) {
@@ -350,7 +383,8 @@ class FileBrowserPageState extends State<FileBrowserPage> {
       if (mounted && Navigator.canPop(context)) {
         Navigator.pop(context);
       }
-      if (!CancelToken.isCancel(e as DioException)) {
+      final isCanceled = e is DioException && CancelToken.isCancel(e);
+      if (!isCanceled && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('下载失败: $e'), backgroundColor: Colors.red),
         );
@@ -359,12 +393,23 @@ class FileBrowserPageState extends State<FileBrowserPage> {
   }
 
   Future<void> _openReader(File file, NasFileItem item) async {
+    final bookId = item.syncBookId;
+    final title = p.basenameWithoutExtension(item.name);
+
+    // 旧版本用文件名作为 bookId，此处把历史记录迁移到指纹键
+    if (bookId != item.name) {
+      await ProgressSyncService.migrateLegacyBookId(
+        legacyBookId: item.name,
+        newBookId: bookId,
+      );
+    }
+
     final progressList = await ProgressSyncService.getAllLocalProgress();
     final savedRecord = progressList.firstWhere(
-      (p) => p.bookId == item.name,
+      (p) => p.bookId == bookId,
       orElse: () => BookProgress(
-        bookId: item.name,
-        title: p.basenameWithoutExtension(item.name),
+        bookId: bookId,
+        title: title,
         filePath: item.path,
         progress: 0.0,
         locator: '',
@@ -383,15 +428,15 @@ class FileBrowserPageState extends State<FileBrowserPage> {
         PageRouteBuilder(
           transitionDuration: const Duration(milliseconds: 120),
           pageBuilder: (context, animation, secondaryAnimation) => StreamTxtReaderPage(
-            bookId: item.name,
+            bookId: bookId,
             file: file,
-            title: p.basenameWithoutExtension(item.name),
+            title: title,
             initialByteOffset: initialOffset,
             onProgressChanged: (byteOffset, progress) {
               ProgressSyncService.updateProgress(
                 dio: _dio,
-                bookId: item.name,
-                title: p.basenameWithoutExtension(item.name),
+                bookId: bookId,
+                title: title,
                 filePath: item.path,
                 progressPercent: progress,
                 locator: byteOffset.toString(),
@@ -409,15 +454,15 @@ class FileBrowserPageState extends State<FileBrowserPage> {
         PageRouteBuilder(
           transitionDuration: const Duration(milliseconds: 120),
           pageBuilder: (context, animation, secondaryAnimation) => EpubReaderPage(
-            bookId: item.name,
+            bookId: bookId,
             file: file,
-            title: p.basenameWithoutExtension(item.name),
+            title: title,
             initialCfi: initialCfi,
             onProgressChanged: (cfi, progress) {
               ProgressSyncService.updateProgress(
                 dio: _dio,
-                bookId: item.name,
-                title: p.basenameWithoutExtension(item.name),
+                bookId: bookId,
+                title: title,
                 filePath: item.path,
                 progressPercent: progress,
                 locator: cfi,
@@ -550,7 +595,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
         itemBuilder: (context, index) {
           final item = _items[index];
           final ext = p.extension(item.name).toLowerCase();
-          final isCached = !item.isDir && _cachedFileNames.contains(item.name);
+          final isCached = !item.isDir && _isItemCached(item);
 
           IconData iconData = Icons.insert_drive_file_outlined;
           Color iconColor = Colors.grey;

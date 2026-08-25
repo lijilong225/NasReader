@@ -1,11 +1,10 @@
 // --- 全局 Dio 单例构建与拦截器注入 ---
-import 'dart:developer' as AppLogger;
-
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:nas_reader/config/api_config.dart';
 import 'package:nas_reader/main_navigation_container.dart';
 import 'package:nas_reader/pages/login_page.dart';
+import 'package:nas_reader/services/app_logger.dart';
 import 'package:nas_reader/services/auth_service.dart';
 
 // 全局 Navigation Key，用于在 Dio 拦截器中触发 401 登出跳转

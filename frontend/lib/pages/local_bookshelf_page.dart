@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 
+import '../core/book_fingerprint.dart';
 import '../services/progress_sync_service.dart';
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
@@ -12,6 +13,7 @@ import '../services/app_logger.dart';
 class BookshelfItem {
   final String bookId;
   final String title;
+  final String fileName;
   final String extension;
   final File? localFile;
   final String remotePath;
@@ -25,6 +27,7 @@ class BookshelfItem {
   BookshelfItem({
     required this.bookId,
     required this.title,
+    required this.fileName,
     required this.extension,
     this.localFile,
     required this.remotePath,
@@ -82,23 +85,30 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
       final booksDir = Directory(p.join(appDir.path, 'books'));
       if (!booksDir.existsSync()) booksDir.createSync(recursive: true);
 
-      final Map<String, File> localFilesMap = {};
+      // 缓存文件名形如 `<指纹>__<原始文件名>`，旧版本为纯文件名。
+      // 分别按 bookId 与原始文件名建立索引，兼容两种命名。
+      final Map<String, File> filesByBookId = {};
+      final Map<String, File> filesByName = {};
       for (var f in booksDir.listSync()) {
         if (f is File) {
-          localFilesMap[p.basename(f.path)] = f;
+          final base = p.basename(f.path);
+          filesByBookId[BookCacheNaming.extractBookId(base)] = f;
+          filesByName[BookCacheNaming.extractOriginalName(base)] = f;
         }
       }
 
       final Map<String, BookshelfItem> mergedItems = {};
 
-      // 3. 先加入远端记录
+      // 3. 先加入远端记录（bookId 为文件指纹，文件名从远端路径推导）
       for (var pItem in progressList) {
-        final ext = p.extension(pItem.bookId).toLowerCase();
-        final localFile = localFilesMap[pItem.bookId];
+        final fileName = pItem.fileName;
+        final ext = p.extension(fileName).toLowerCase();
+        final localFile = filesByBookId[pItem.bookId] ?? filesByName[fileName];
 
         mergedItems[pItem.bookId] = BookshelfItem(
           bookId: pItem.bookId,
-          title: pItem.title.isNotEmpty ? pItem.title : p.basenameWithoutExtension(pItem.bookId),
+          title: pItem.title.isNotEmpty ? pItem.title : p.basenameWithoutExtension(fileName),
+          fileName: fileName,
           extension: ext,
           localFile: localFile,
           remotePath: pItem.filePath,
@@ -110,13 +120,15 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
       }
 
       // 4. 补充本地已存在但尚未有远端进度的离线书籍
-      localFilesMap.forEach((name, file) {
-        if (!mergedItems.containsKey(name)) {
-          final ext = p.extension(name).toLowerCase();
+      filesByBookId.forEach((bookId, file) {
+        if (!mergedItems.containsKey(bookId)) {
+          final fileName = BookCacheNaming.extractOriginalName(p.basename(file.path));
+          final ext = p.extension(fileName).toLowerCase();
           if (ext == '.txt' || ext == '.epub') {
-            mergedItems[name] = BookshelfItem(
-              bookId: name,
-              title: p.basenameWithoutExtension(name),
+            mergedItems[bookId] = BookshelfItem(
+              bookId: bookId,
+              title: p.basenameWithoutExtension(fileName),
+              fileName: fileName,
               extension: ext,
               localFile: file,
               remotePath: '',
@@ -221,7 +233,11 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
       );
 
       final appDir = await getApplicationDocumentsDirectory();
-      final savePath = p.join(appDir.path, 'books', book.bookId);
+      final savePath = p.join(
+        appDir.path,
+        'books',
+        BookCacheNaming.buildFileName(bookId: book.bookId, originalName: book.fileName),
+      );
       final downloadPath = book.remotePath.startsWith('/') ? book.remotePath : '/${book.remotePath}';
 
       try {

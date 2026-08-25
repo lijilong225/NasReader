@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:nas_reader/config/api_config.dart';
+import 'package:nas_reader/config/theme_manager.dart'; // 👈 引入 ThemeManager
 import 'package:nas_reader/services/auth_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -11,12 +12,10 @@ import 'login_page.dart';
 import '../services/app_logger.dart';
 
 class SettingsPage extends StatefulWidget {
-  final ValueNotifier<ThemeMode>? themeNotifier;
   final Dio? dio;
 
   const SettingsPage({
     super.key,
-    this.themeNotifier,
     this.dio,
   });
 
@@ -28,13 +27,11 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
   String _cacheSizeStr = '计算中...';
   bool _isClearing = false;
   bool _isCalculating = false;
-  ThemeMode _currentTheme = ThemeMode.system;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _initThemeMode();
     calculateCacheSize();
   }
 
@@ -49,25 +46,6 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
     if (state == AppLifecycleState.resumed) {
       calculateCacheSize();
     }
-  }
-
-  Future<void> _initThemeMode() async {
-    if (widget.themeNotifier != null) {
-      setState(() => _currentTheme = widget.themeNotifier!.value);
-      return;
-    }
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final savedTheme = prefs.getString('app_theme_mode');
-      if (savedTheme != null) {
-        setState(() {
-          _currentTheme = ThemeMode.values.firstWhere(
-            (e) => e.name == savedTheme,
-            orElse: () => ThemeMode.system,
-          );
-        });
-      }
-    } catch (_) {}
   }
 
   Future<void> calculateCacheSize() async {
@@ -299,41 +277,40 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
             ),
             const Divider(),
 
-            // 2. 外观与主题
+            // 2. 外观与主题（直接与 ThemeManager.themeModeNotifier 联动）
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text('外观与主题', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
             ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              child: SegmentedButton<ThemeMode>(
-                segments: const [
-                  ButtonSegment<ThemeMode>(
-                    value: ThemeMode.system,
-                    label: Text('跟随系统'),
-                    icon: Icon(Icons.brightness_auto),
-                  ),
-                  ButtonSegment<ThemeMode>(
-                    value: ThemeMode.light,
-                    label: Text('浅色'),
-                    icon: Icon(Icons.light_mode),
-                  ),
-                  ButtonSegment<ThemeMode>(
-                    value: ThemeMode.dark,
-                    label: Text('深色'),
-                    icon: Icon(Icons.dark_mode),
-                  ),
-                ],
-                selected: {_currentTheme},
-                onSelectionChanged: (Set<ThemeMode> newSelection) async {
-                  final selected = newSelection.first;
-                  setState(() => _currentTheme = selected);
-                  widget.themeNotifier?.value = selected;
-
-                  try {
-                    final prefs = await SharedPreferences.getInstance();
-                    await prefs.setString('app_theme_mode', selected.name);
-                  } catch (_) {}
+              child: ValueListenableBuilder<ThemeMode>(
+                valueListenable: ThemeManager.themeModeNotifier,
+                builder: (context, currentMode, _) {
+                  return SegmentedButton<ThemeMode>(
+                    segments: const [
+                      ButtonSegment<ThemeMode>(
+                        value: ThemeMode.system,
+                        label: Text('跟随系统'),
+                        icon: Icon(Icons.brightness_auto),
+                      ),
+                      ButtonSegment<ThemeMode>(
+                        value: ThemeMode.light,
+                        label: Text('浅色'),
+                        icon: Icon(Icons.light_mode),
+                      ),
+                      ButtonSegment<ThemeMode>(
+                        value: ThemeMode.dark,
+                        label: Text('深色'),
+                        icon: Icon(Icons.dark_mode),
+                      ),
+                    ],
+                    selected: {currentMode},
+                    onSelectionChanged: (Set<ThemeMode> newSelection) {
+                      // 触发全局 ThemeManager 更新并通知 main.dart 重绘
+                      ThemeManager.updateTheme(newSelection.first);
+                    },
+                  );
                 },
               ),
             ),

@@ -7,12 +7,10 @@ import 'pages/settings_page.dart';
 
 class MainNavigationContainer extends StatefulWidget {
   final Dio dio;
-  final ValueNotifier<ThemeMode>? themeNotifier;
 
   const MainNavigationContainer({
     super.key,
     required this.dio,
-    this.themeNotifier,
   });
 
   @override
@@ -34,14 +32,13 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
     super.initState();
     _pages = [
       LocalBookshelfPage(
-        key: _bookshelfKey, // 👈 绑定 Key
+        key: _bookshelfKey,
         dio: widget.dio,
       ),
       FileBrowserPage(dio: widget.dio),
       SettingsPage(
         key: _settingsKey,
         dio: widget.dio,
-        themeNotifier: widget.themeNotifier,
       ),
     ];
   }
@@ -55,7 +52,7 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
     if (index == 0) {
       _bookshelfKey.currentState?.loadLocalBooks();
     }
-    // 当用户切回「系统设置」Tab (index = 2) 时，自动刷新缓存大小
+    // 2. 切到「系统设置」(index = 2) 时自动刷新缓存大小
     if (index == 2) {
       _settingsKey.currentState?.calculateCacheSize();
     }
@@ -63,6 +60,8 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Scaffold(
       body: IndexedStack(
         index: _currentIndex,
@@ -72,8 +71,9 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
         currentIndex: _currentIndex,
         onTap: _onTabTapped,
         type: BottomNavigationBarType.fixed,
-        selectedItemColor: Theme.of(context).colorScheme.primary,
-        unselectedItemColor: Colors.grey,
+        backgroundColor: theme.colorScheme.surface,
+        selectedItemColor: theme.colorScheme.primary,
+        unselectedItemColor: theme.colorScheme.onSurfaceVariant,
         items: const [
           BottomNavigationBarItem(
             icon: Icon(Icons.book_outlined),

@@ -6,6 +6,7 @@ import 'package:nas_reader/core/network_client.dart';
 import '../services/auth_service.dart';
 import '../main_navigation_container.dart';
 import '../services/progress_sync_service.dart';
+import '../services/server_profile_service.dart';
 
 // --- 登录 / 注册统一页面 ---
 class LoginPage extends StatefulWidget {
@@ -26,19 +27,77 @@ class _LoginPageState extends State<LoginPage> {
   bool _isLoading = false;
   String? _errorMessage;
 
+  List<ServerProfile> _profiles = const [];
+  bool _rememberPassword = true;
+
   @override
   void initState() {
     super.initState();
     _loadSavedServerUrl();
   }
 
+  /// 默认选中最近使用过的地址，并回填该地址上次的登录信息
   Future<void> _loadSavedServerUrl() async {
+    final profiles = await ServerProfileService.loadProfiles();
     final savedUrl = await AuthService.getBaseUrl();
-    if (savedUrl != null && savedUrl.isNotEmpty) {
-      _serverController.text = savedUrl;
-    } else {
-      _serverController.text = ApiConfig.baseUrl;
+
+    final initialUrl = profiles.isNotEmpty
+        ? profiles.first.url
+        : ServerProfileService.normalizeUrl(
+            (savedUrl != null && savedUrl.isNotEmpty) ? savedUrl : ApiConfig.baseUrl,
+          );
+
+    if (!mounted) return;
+    setState(() {
+      _profiles = profiles;
+      _serverController.text = initialUrl;
+    });
+
+    await _fillCredentials(initialUrl);
+  }
+
+  /// 按地址自动填充上次输入的用户名与已记住的密码
+  Future<void> _fillCredentials(String url) async {
+    final normalized = ServerProfileService.normalizeUrl(url);
+    final profile = _profiles.firstWhere(
+      (p) => p.url == normalized,
+      orElse: () => const ServerProfile(url: ''),
+    );
+
+    if (profile.url.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _usernameController.text = '';
+        _passwordController.text = '';
+        _rememberPassword = true;
+      });
+      return;
     }
+
+    final password =
+        profile.rememberPassword ? await ServerProfileService.readPassword(normalized) : '';
+
+    if (!mounted) return;
+    setState(() {
+      _usernameController.text = profile.username;
+      _passwordController.text = password;
+      _rememberPassword = profile.rememberPassword;
+    });
+  }
+
+  Future<void> _onServerSelected(String url) async {
+    setState(() {
+      _serverController.text = url;
+      _errorMessage = null;
+    });
+    await _fillCredentials(url);
+  }
+
+  Future<void> _removeProfile(ServerProfile profile) async {
+    await ServerProfileService.removeProfile(profile.url);
+    final profiles = await ServerProfileService.loadProfiles();
+    if (!mounted) return;
+    setState(() => _profiles = profiles);
   }
 
   @override
@@ -104,6 +163,14 @@ class _LoginPageState extends State<LoginPage> {
       // 4. 登录成功后静默拉取远端全量阅读进度
       await ProgressSyncService.syncWithRemote(authedDio);
 
+      // 5. 记录本次使用的服务器与登录信息，供下次自动填充
+      await ServerProfileService.saveProfile(
+        url: serverUrl,
+        username: username,
+        password: password,
+        rememberPassword: _rememberPassword,
+      );
+
       if (!mounted) return;
 
       Navigator.pushReplacement(
@@ -166,7 +233,7 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const SizedBox(height: 32),
 
-                  // 服务端 URL
+                  // 服务端 URL（可从最近使用过的地址中切换）
                   TextFormField(
                     controller: _serverController,
                     decoration: InputDecoration(
@@ -174,6 +241,52 @@ class _LoginPageState extends State<LoginPage> {
                       hintText: ApiConfig.baseUrl,
                       prefixIcon: const Icon(Icons.dns_outlined),
                       border: const OutlineInputBorder(),
+                      suffixIcon: _profiles.isEmpty
+                          ? null
+                          : PopupMenuButton<ServerProfile>(
+                              icon: const Icon(Icons.arrow_drop_down),
+                              tooltip: '最近使用的服务器',
+                              onSelected: (p) => _onServerSelected(p.url),
+                              itemBuilder: (ctx) => _profiles
+                                  .map(
+                                    (p) => PopupMenuItem<ServerProfile>(
+                                      value: p,
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  p.url,
+                                                  style: const TextStyle(fontSize: 13),
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                                if (p.username.isNotEmpty)
+                                                  Text(
+                                                    p.username,
+                                                    style: const TextStyle(
+                                                      fontSize: 11,
+                                                      color: Colors.grey,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                          IconButton(
+                                            icon: const Icon(Icons.close, size: 16),
+                                            tooltip: '删除该记录',
+                                            onPressed: () {
+                                              Navigator.pop(ctx);
+                                              _removeProfile(p);
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                            ),
                     ),
                     validator: (v) =>
                         (v == null || v.isEmpty) ? '请输入服务器 URL' : null,
@@ -205,7 +318,20 @@ class _LoginPageState extends State<LoginPage> {
                     validator: (v) =>
                         (v == null || v.length < 6) ? '密码长度至少 6 位' : null,
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 4),
+
+                  // 记住密码：关闭时仅保留地址与用户名
+                  Row(
+                    children: [
+                      Checkbox(
+                        value: _rememberPassword,
+                        onChanged: (v) =>
+                            setState(() => _rememberPassword = v ?? false),
+                      ),
+                      const Text('记住密码', style: TextStyle(fontSize: 13)),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
 
                   // 邀请码（仅注册）
                   if (_isRegisterMode) ...[

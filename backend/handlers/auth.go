@@ -63,6 +63,12 @@ type AuthRequest struct {
 	Password string `json:"password" binding:"required,min=6"`
 }
 
+// ChangePasswordRequest 修改密码；新密码沿用注册的 min=8 强度要求
+type ChangePasswordRequest struct {
+	OldPassword string `json:"oldPassword" binding:"required,min=6"`
+	NewPassword string `json:"newPassword" binding:"required,min=8"`
+}
+
 func Register(c *gin.Context) {
 	if !registrationEnabled() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "服务端未开放注册"})
@@ -161,4 +167,53 @@ func Login(c *gin.Context) {
 			"username": user.Username,
 		},
 	})
+}
+
+// ChangePassword 修改当前登录用户的密码。
+// 注意：JWT 无状态，旧 Token 在过期前仍然有效，客户端需在成功后自行登出。
+func ChangePassword(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未授权"})
+		return
+	}
+
+	var req ChangePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.OldPassword == req.NewPassword {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "新密码不能与原密码相同"})
+		return
+	}
+
+	var user models.User
+	if err := config.DB.Where("id = ?", userID).First(&user).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在"})
+		return
+	}
+
+	clientKey := c.ClientIP()
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.OldPassword)); err != nil {
+		AuthLimiter.RecordFailure(clientKey)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "原密码不正确"})
+		return
+	}
+
+	hashed, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "密码加密失败"})
+		return
+	}
+
+	if err := config.DB.Model(&user).Update("password", string(hashed)).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "密码更新失败"})
+		return
+	}
+
+	AuthLimiter.Reset(clientKey)
+
+	c.JSON(http.StatusOK, gin.H{"message": "密码修改成功，请重新登录"})
 }

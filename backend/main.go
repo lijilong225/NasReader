@@ -77,6 +77,13 @@ func main() {
 			authGroup.POST("/login", handlers.Login)
 		}
 
+		// 账号维护接口：需登录态，且沿用登录失败频率限制
+		accountGroup := api.Group("/auth")
+		accountGroup.Use(middleware.AuthRateLimit(handlers.AuthLimiter), middleware.AuthMiddleware())
+		{
+			accountGroup.POST("/password", handlers.ChangePassword)
+		}
+
 		// 受保护接口：需携带 JWT Token
 		syncGroup := api.Group("/sync")
 		syncGroup.Use(middleware.AuthMiddleware())

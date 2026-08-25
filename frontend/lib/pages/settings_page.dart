@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:nas_reader/config/api_config.dart';
 import 'package:nas_reader/config/theme_manager.dart'; // 👈 引入 ThemeManager
+import 'package:nas_reader/core/network_client.dart';
 import 'package:nas_reader/services/auth_service.dart';
+import 'package:nas_reader/services/server_profile_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:package_info_plus/package_info_plus.dart';
@@ -440,6 +442,11 @@ class AccountCenterPage extends StatelessWidget {
 
     if (confirm != true) return;
 
+    await _performLogout(context);
+  }
+
+  /// 清理本地凭证并回到登录页（退出登录与修改密码共用）
+  static Future<void> _performLogout(BuildContext context) async {
     try {
       await ApiConfig.onLogout();
       await AuthService.clearAuth();
@@ -464,6 +471,20 @@ class AccountCenterPage extends StatelessWidget {
       ),
       (route) => false,
     );
+  }
+
+  Future<void> _openChangePassword(BuildContext context) async {
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const ChangePasswordPage()),
+    );
+
+    if (changed != true || !context.mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('密码已修改，请使用新密码重新登录')),
+    );
+    await _performLogout(context);
   }
 
   @override
@@ -558,6 +579,24 @@ class AccountCenterPage extends StatelessWidget {
               ],
             ),
           ),
+          const SizedBox(height: 20),
+          const Text('安全设置', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey)),
+          const SizedBox(height: 8),
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+              side: BorderSide(color: Colors.grey.shade300),
+            ),
+            child: ListTile(
+              leading: const Icon(Icons.password_outlined, color: Color(0xFF5A4A3A)),
+              title: const Text('修改登录密码', style: TextStyle(fontSize: 14)),
+              subtitle: const Text('修改成功后需重新登录', style: TextStyle(fontSize: 12)),
+              trailing: const Icon(Icons.chevron_right),
+              enabled: ApiConfig.isLoggedIn,
+              onTap: ApiConfig.isLoggedIn ? () => _openChangePassword(context) : null,
+            ),
+          ),
           const SizedBox(height: 32),
           FilledButton.tonal(
             style: FilledButton.styleFrom(
@@ -569,6 +608,157 @@ class AccountCenterPage extends StatelessWidget {
             child: const Text('退出登录', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 修改登录密码页面：成功后由调用方触发登出
+class ChangePasswordPage extends StatefulWidget {
+  const ChangePasswordPage({super.key});
+
+  @override
+  State<ChangePasswordPage> createState() => _ChangePasswordPageState();
+}
+
+class _ChangePasswordPageState extends State<ChangePasswordPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _oldController = TextEditingController();
+  final _newController = TextEditingController();
+  final _confirmController = TextEditingController();
+
+  bool _isSubmitting = false;
+  String? _errorMessage;
+
+  @override
+  void dispose() {
+    _oldController.dispose();
+    _newController.dispose();
+    _confirmController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() {
+      _isSubmitting = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final dio = NetworkClient.getDio();
+      await dio.post(
+        '/api/v1/auth/password',
+        data: {
+          'oldPassword': _oldController.text,
+          'newPassword': _newController.text,
+        },
+      );
+
+      // 旧密码已失效，清掉本地记住的密码避免自动填充错误凭证
+      await ServerProfileService.clearPassword(ApiConfig.baseUrl);
+
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      var msg = '修改失败，请稍后重试';
+      if (data is Map) {
+        msg = (data['error'] ?? data['message'] ?? msg).toString();
+      } else if (e.response == null) {
+        msg = '网络连接失败，请检查服务器地址';
+      }
+      if (!mounted) return;
+      setState(() => _errorMessage = msg);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _errorMessage = '发生错误: $e');
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('修改密码')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextFormField(
+                controller: _oldController,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: '当前密码',
+                  prefixIcon: Icon(Icons.lock_outline),
+                  border: OutlineInputBorder(),
+                ),
+                validator: (v) => (v == null || v.length < 6) ? '请输入当前密码' : null,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _newController,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: '新密码',
+                  helperText: '至少 8 位',
+                  prefixIcon: Icon(Icons.lock_reset_outlined),
+                  border: OutlineInputBorder(),
+                ),
+                validator: (v) {
+                  if (v == null || v.length < 8) return '新密码长度至少 8 位';
+                  if (v == _oldController.text) return '新密码不能与当前密码相同';
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _confirmController,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: '确认新密码',
+                  prefixIcon: Icon(Icons.check_circle_outline),
+                  border: OutlineInputBorder(),
+                ),
+                validator: (v) => v != _newController.text ? '两次输入的新密码不一致' : null,
+              ),
+              if (_errorMessage != null) ...[
+                const SizedBox(height: 16),
+                Text(
+                  _errorMessage!,
+                  style: const TextStyle(color: Colors.red, fontSize: 13),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+              const SizedBox(height: 28),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  backgroundColor: const Color(0xFF382E25),
+                ),
+                onPressed: _isSubmitting ? null : _submit,
+                child: _isSubmitting
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Text('确认修改', style: TextStyle(fontSize: 16)),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                '修改成功后将立即退出登录，请使用新密码重新登录。',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

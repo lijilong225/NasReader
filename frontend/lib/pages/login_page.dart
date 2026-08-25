@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:nas_reader/config/api_config.dart';
+import 'package:nas_reader/core/network_client.dart';
 
-import '../main.dart';
 import '../services/auth_service.dart';
 import '../main_navigation_container.dart';
 import '../services/progress_sync_service.dart';

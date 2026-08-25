@@ -1,11 +1,11 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
+import 'package:nas_reader/core/network_client.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../main.dart'; // 引入 NetworkClient
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
 import '../services/progress_sync_service.dart';

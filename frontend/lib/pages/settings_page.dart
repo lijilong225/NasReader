@@ -7,7 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'login_page.dart'; // 引入登录页
+import 'login_page.dart';
 import '../services/app_logger.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -28,11 +28,13 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
   String _cacheSizeStr = '计算中...';
   bool _isClearing = false;
   bool _isCalculating = false;
+  ThemeMode _currentTheme = ThemeMode.system;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _initThemeMode();
     calculateCacheSize();
   }
 
@@ -47,6 +49,25 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
     if (state == AppLifecycleState.resumed) {
       calculateCacheSize();
     }
+  }
+
+  Future<void> _initThemeMode() async {
+    if (widget.themeNotifier != null) {
+      setState(() => _currentTheme = widget.themeNotifier!.value);
+      return;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedTheme = prefs.getString('app_theme_mode');
+      if (savedTheme != null) {
+        setState(() {
+          _currentTheme = ThemeMode.values.firstWhere(
+            (e) => e.name == savedTheme,
+            orElse: () => ThemeMode.system,
+          );
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> calculateCacheSize() async {
@@ -171,60 +192,6 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
     }
   }
 
-  // 退出登录逻辑
-  Future<void> _handleLogout() async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('退出登录'),
-        content: const Text('确定要退出当前账号并返回登录页吗？'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('退出', style: TextStyle(color: Colors.redAccent)),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm != true) return;
-
-    try {
-      // 1. 同步清理 ApiConfig 内存态与持久化凭证
-      await ApiConfig.onLogout();
-
-      // 2. 清理 AuthService 中的存储标记
-      await AuthService.clearAuth();
-
-      // 3. 兜底清理 SharedPreferences 冗余历史 key
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove('jwt_token');
-      await prefs.remove('token');
-      await prefs.remove('is_logged_in');
-    } catch (e) {
-      AppLogger.log('❌ 清理 Token 异常: $e');
-    }
-
-    if (!mounted) return;
-
-    // 4. 清空路由栈，重定向到登录页
-    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-      PageRouteBuilder(
-        transitionDuration: const Duration(milliseconds: 150),
-        pageBuilder: (context, animation, secondaryAnimation) => const LoginPage(),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          return FadeTransition(opacity: animation, child: child);
-        },
-      ),
-      (route) => false,
-    );
-  }
-
-  // 关于 App 概述弹窗
   void _showAboutDialog() {
     showDialog(
       context: context,
@@ -277,7 +244,6 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
 
   @override
   Widget build(BuildContext context) {
-    final currentTheme = widget.themeNotifier?.value ?? ThemeMode.system;
     final user = ApiConfig.currentUser;
 
     return Scaffold(
@@ -326,50 +292,52 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => AccountCenterPage(onLogout: _handleLogout),
+                    builder: (context) => const AccountCenterPage(),
                   ),
                 );
               },
             ),
             const Divider(),
+
             // 2. 外观与主题
-            // 外观与主题
-            if (widget.themeNotifier != null) ...[
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Text('外观与主题', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
-              ),
-              RadioGroup<ThemeMode>(
-                groupValue: currentTheme,
-                onChanged: (val) {
-                  if (val != null) {
-                    setState(() {
-                      widget.themeNotifier!.value = val;
-                    });
-                  }
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Text('外观与主题', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: SegmentedButton<ThemeMode>(
+                segments: const [
+                  ButtonSegment<ThemeMode>(
+                    value: ThemeMode.system,
+                    label: Text('跟随系统'),
+                    icon: Icon(Icons.brightness_auto),
+                  ),
+                  ButtonSegment<ThemeMode>(
+                    value: ThemeMode.light,
+                    label: Text('浅色'),
+                    icon: Icon(Icons.light_mode),
+                  ),
+                  ButtonSegment<ThemeMode>(
+                    value: ThemeMode.dark,
+                    label: Text('深色'),
+                    icon: Icon(Icons.dark_mode),
+                  ),
+                ],
+                selected: {_currentTheme},
+                onSelectionChanged: (Set<ThemeMode> newSelection) async {
+                  final selected = newSelection.first;
+                  setState(() => _currentTheme = selected);
+                  widget.themeNotifier?.value = selected;
+
+                  try {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setString('app_theme_mode', selected.name);
+                  } catch (_) {}
                 },
-                child: Column(
-                  children: const [
-                    RadioListTile<ThemeMode>(
-                      secondary: Icon(Icons.brightness_auto),
-                      title: Text('跟随系统'),
-                      value: ThemeMode.system,
-                    ),
-                    RadioListTile<ThemeMode>(
-                      secondary: Icon(Icons.light_mode),
-                      title: Text('浅色模式'),
-                      value: ThemeMode.light,
-                    ),
-                    RadioListTile<ThemeMode>(
-                      secondary: Icon(Icons.dark_mode),
-                      title: Text('深色模式'),
-                      value: ThemeMode.dark,
-                    ),
-                  ],
-                ),
               ),
-              const Divider(),
-            ],
+            ),
+            const Divider(),
 
             // 3. 存储与诊断
             const Padding(
@@ -398,7 +366,7 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
             ),
             const Divider(),
 
-            // 4. 关于与登出
+            // 4. 关于
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text('系统信息', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
@@ -410,11 +378,6 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
               trailing: const Icon(Icons.chevron_right),
               onTap: _showAboutDialog,
             ),
-            ListTile(
-              leading: const Icon(Icons.logout, color: Colors.redAccent),
-              title: const Text('退出登录', style: TextStyle(color: Colors.redAccent)),
-              onTap: _handleLogout,
-            ),
           ],
         ),
       ),
@@ -422,11 +385,56 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
   }
 }
 
-/// 账号信息二级页面
+/// 账号信息二级页面（包含退出登录）
 class AccountCenterPage extends StatelessWidget {
-  final Future<void> Function()? onLogout;
+  const AccountCenterPage({super.key});
 
-  const AccountCenterPage({super.key, this.onLogout});
+  Future<void> _handleLogout(BuildContext context) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('退出登录'),
+        content: const Text('确定要退出当前账号并返回登录页吗？退出后将无法自动同步阅读进度。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('退出', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      await ApiConfig.onLogout();
+      await AuthService.clearAuth();
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('jwt_token');
+      await prefs.remove('token');
+      await prefs.remove('is_logged_in');
+    } catch (e) {
+      AppLogger.log('❌ 清理 Token 异常: $e');
+    }
+
+    if (!context.mounted) return;
+
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 150),
+        pageBuilder: (context, animation, secondaryAnimation) => const LoginPage(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+      ),
+      (route) => false,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -527,10 +535,7 @@ class AccountCenterPage extends StatelessWidget {
               foregroundColor: Colors.redAccent,
               backgroundColor: Colors.redAccent.withValues(alpha: 0.1),
             ),
-            onPressed: () {
-              Navigator.pop(context);
-              onLogout?.call();
-            },
+            onPressed: () => _handleLogout(context),
             child: const Text('退出登录', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],

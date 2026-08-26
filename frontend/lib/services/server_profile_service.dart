@@ -11,24 +11,30 @@ class ServerProfile {
   final String url;
   final String username;
 
+  /// 该主服务器对应的备用地址，为空表示未配置
+  final String backupUrl;
+
   /// 是否记住密码；为 false 时安全存储中不保留密码
   final bool rememberPassword;
 
   const ServerProfile({
     required this.url,
     this.username = '',
+    this.backupUrl = '',
     this.rememberPassword = true,
   });
 
   Map<String, dynamic> toJson() => {
     'url': url,
     'username': username,
+    'backupUrl': backupUrl,
     'rememberPassword': rememberPassword,
   };
 
   factory ServerProfile.fromJson(Map<String, dynamic> json) => ServerProfile(
     url: (json['url'] ?? '').toString(),
     username: (json['username'] ?? '').toString(),
+    backupUrl: (json['backupUrl'] ?? '').toString(),
     rememberPassword: json['rememberPassword'] != false,
   );
 }
@@ -80,6 +86,7 @@ class ServerProfileService {
     required String username,
     required String password,
     required bool rememberPassword,
+    String backupUrl = '',
   }) async {
     final normalized = normalizeUrl(url);
     if (normalized.isEmpty) return;
@@ -93,6 +100,7 @@ class ServerProfileService {
       ServerProfile(
         url: normalized,
         username: username.trim(),
+        backupUrl: normalizeUrl(backupUrl),
         rememberPassword: rememberPassword,
       ),
     );

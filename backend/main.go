@@ -69,6 +69,11 @@ func main() {
 
 	api := r.Group("/api/v1")
 	{
+		// 开放接口：健康探针，供客户端主备服务器切换时探测可用性
+		api.GET("/health", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		})
+
 		// 开放接口：用户注册与登录
 		authGroup := api.Group("/auth")
 		authGroup.Use(middleware.AuthRateLimit(handlers.AuthLimiter))

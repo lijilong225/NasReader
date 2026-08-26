@@ -6,6 +6,7 @@ import 'package:nas_reader/core/network_client.dart';
 import '../services/auth_service.dart';
 import '../main_navigation_container.dart';
 import '../services/progress_sync_service.dart';
+import '../services/server_endpoint_service.dart';
 import '../services/server_profile_service.dart';
 
 // --- 登录 / 注册统一页面 ---
@@ -19,6 +20,7 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final _formKey = GlobalKey<FormState>();
   final _serverController = TextEditingController(text: ApiConfig.baseUrl);
+  final _backupServerController = TextEditingController();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _inviteCodeController = TextEditingController();
@@ -30,6 +32,9 @@ class _LoginPageState extends State<LoginPage> {
   List<ServerProfile> _profiles = const [];
   bool _rememberPassword = true;
 
+  /// 是否展开备用服务器输入框
+  bool _showBackupField = false;
+
   @override
   void initState() {
     super.initState();
@@ -39,18 +44,23 @@ class _LoginPageState extends State<LoginPage> {
   /// 默认选中最近使用过的地址，并回填该地址上次的登录信息
   Future<void> _loadSavedServerUrl() async {
     final profiles = await ServerProfileService.loadProfiles();
+    final endpoints = await ServerEndpointService.load();
     final savedUrl = await AuthService.getBaseUrl();
 
-    final initialUrl = profiles.isNotEmpty
-        ? profiles.first.url
-        : ServerProfileService.normalizeUrl(
-            (savedUrl != null && savedUrl.isNotEmpty) ? savedUrl : ApiConfig.baseUrl,
-          );
+    final initialUrl = endpoints.primary.isNotEmpty
+        ? endpoints.primary
+        : profiles.isNotEmpty
+            ? profiles.first.url
+            : ServerProfileService.normalizeUrl(
+                (savedUrl != null && savedUrl.isNotEmpty) ? savedUrl : ApiConfig.baseUrl,
+              );
 
     if (!mounted) return;
     setState(() {
       _profiles = profiles;
       _serverController.text = initialUrl;
+      _backupServerController.text = endpoints.backup;
+      _showBackupField = endpoints.backup.isNotEmpty;
     });
 
     await _fillCredentials(initialUrl);
@@ -82,6 +92,10 @@ class _LoginPageState extends State<LoginPage> {
       _usernameController.text = profile.username;
       _passwordController.text = password;
       _rememberPassword = profile.rememberPassword;
+      if (profile.backupUrl.isNotEmpty) {
+        _backupServerController.text = profile.backupUrl;
+        _showBackupField = true;
+      }
     });
   }
 
@@ -103,6 +117,7 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void dispose() {
     _serverController.dispose();
+    _backupServerController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
     _inviteCodeController.dispose();
@@ -117,12 +132,38 @@ class _LoginPageState extends State<LoginPage> {
       _errorMessage = null;
     });
 
-    final serverUrl = _serverController.text.trim();
+    final primaryUrl = ServerProfileService.normalizeUrl(_serverController.text);
+    final backupUrl = _showBackupField
+        ? ServerProfileService.normalizeUrl(_backupServerController.text)
+        : '';
     final username = _usernameController.text.trim();
     final password = _passwordController.text;
 
     try {
-      // 1. 同步保存并更新全局 ApiConfig 的 BaseUrl
+      // 1. 优先探测主服务器，不可用时回落备用服务器
+      final pick = await ServerEndpointService.pickAvailable(
+        primary: primaryUrl,
+        backup: backupUrl,
+      );
+
+      if (pick == null) {
+        setState(() {
+          _errorMessage = backupUrl.isEmpty
+              ? '主服务器无法连接，请检查地址或配置备用服务器'
+              : '主服务器与备用服务器均无法连接';
+        });
+        return;
+      }
+
+      final serverUrl = pick.url;
+
+      // 2. 同步保存主备配置并更新全局 ApiConfig 的 BaseUrl
+      await ServerEndpointService.save(
+        primary: primaryUrl,
+        backup: backupUrl,
+        usingBackup: pick.usingBackup,
+      );
+      NetworkClient.reset();
       await ApiConfig.setBaseUrl(serverUrl);
       await AuthService.saveBaseUrl(serverUrl);
 
@@ -141,7 +182,7 @@ class _LoginPageState extends State<LoginPage> {
       final data = response.data;
       final token = (data['token'] ?? data['data']?['token'] ?? '') as String;
       
-      // 2. 解析用户信息（安全类型转换，避免 as int 崩溃）
+      // 3. 解析用户信息（安全类型转换，避免 as int 崩溃）
       final rawUser = (data['user'] ?? data['data']?['user']) as Map<String, dynamic>?;
 
       final fallbackId =
@@ -154,24 +195,31 @@ class _LoginPageState extends State<LoginPage> {
               username: username,
             );
 
-      // 3. 核心：更新全局 ApiConfig 登录态与本地持久化
+      // 4. 核心：更新全局 ApiConfig 登录态与本地持久化
       await ApiConfig.onLoginSuccess(token: token, user: user);
       await AuthService.saveToken(token);
 
       final authedDio = NetworkClient.getDio(baseUrl: serverUrl, token: token);
 
-      // 4. 登录成功后静默拉取远端全量阅读进度
+      // 5. 登录成功后静默拉取远端全量阅读进度
       await ProgressSyncService.syncWithRemote(authedDio);
 
-      // 5. 记录本次使用的服务器与登录信息，供下次自动填充
+      // 6. 记录本次使用的服务器与登录信息，供下次自动填充
       await ServerProfileService.saveProfile(
-        url: serverUrl,
+        url: primaryUrl,
         username: username,
         password: password,
         rememberPassword: _rememberPassword,
+        backupUrl: backupUrl,
       );
 
       if (!mounted) return;
+
+      if (pick.usingBackup) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('主服务器不可用，已通过备用服务器登录')),
+        );
+      }
 
       Navigator.pushReplacement(
         context,
@@ -233,11 +281,11 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const SizedBox(height: 32),
 
-                  // 服务端 URL（可从最近使用过的地址中切换）
+                  // 主服务端 URL（可从最近使用过的地址中切换）
                   TextFormField(
                     controller: _serverController,
                     decoration: InputDecoration(
-                      labelText: '后端服务地址',
+                      labelText: '主服务地址',
                       hintText: ApiConfig.baseUrl,
                       prefixIcon: const Icon(Icons.dns_outlined),
                       border: const OutlineInputBorder(),
@@ -291,9 +339,40 @@ class _LoginPageState extends State<LoginPage> {
                     validator: (v) =>
                         (v == null || v.isEmpty) ? '请输入服务器 URL' : null,
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 8),
 
-                  // 用户名
+                  // 备用服务地址（可选）：主服务不可用时自动尝试
+                  if (_showBackupField)
+                    TextFormField(
+                      controller: _backupServerController,
+                      decoration: InputDecoration(
+                        labelText: '备用服务地址（可选）',
+                        helperText: '主服务器不可用时自动尝试此地址',
+                        prefixIcon: const Icon(Icons.backup_outlined),
+                        border: const OutlineInputBorder(),
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.close),
+                          tooltip: '移除备用服务器',
+                          onPressed: () => setState(() {
+                            _backupServerController.clear();
+                            _showBackupField = false;
+                          }),
+                        ),
+                      ),
+                    )
+                  else
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () => setState(() => _showBackupField = true),
+                        icon: const Icon(Icons.add, size: 18),
+                        label: const Text('添加备用服务器'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: const Color(0xFF382E25),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 16),
                   TextFormField(
                     controller: _usernameController,
                     decoration: const InputDecoration(

@@ -12,18 +12,21 @@ void main() {
     const profile = ServerProfile(
       url: 'http://nas:6088',
       username: 'alice',
+      backupUrl: 'http://backup:6088',
       rememberPassword: false,
     );
 
     final restored = ServerProfile.fromJson(profile.toJson());
     expect(restored.url, 'http://nas:6088');
     expect(restored.username, 'alice');
+    expect(restored.backupUrl, 'http://backup:6088');
     expect(restored.rememberPassword, isFalse);
   });
 
   test('ServerProfile.fromJson 缺字段时退化为空串并默认记住密码', () {
     final profile = ServerProfile.fromJson({'url': 'http://nas:6088'});
     expect(profile.username, '');
+    expect(profile.backupUrl, '');
     expect(profile.rememberPassword, isTrue);
   });
 

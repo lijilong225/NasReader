@@ -5,7 +5,7 @@
   "packages": [
     {
       "name": "nas_reader",
-      "version": "0.6.1+66",
+      "version": "0.6.2+66",
       "dependencies": [
         "archive",
         "connectivity_plus",

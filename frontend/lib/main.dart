@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:nas_reader/config/api_config.dart';
 import 'package:nas_reader/config/theme_manager.dart';
 import 'package:nas_reader/core/network_client.dart';
+import 'package:nas_reader/services/server_endpoint_service.dart';
 
 // 引入本地书架与 NAS 文件浏览器页面
 import 'pages/login_page.dart';
@@ -11,7 +12,19 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await ApiConfig.init();
   await ThemeManager.init(); // 👈 初始化主题配置
+  await _restorePrimaryServer();
   runApp(const MyApp());
+}
+
+/// 上次走的是备用服务器时，启动阶段探测主服务器并静默切回
+Future<void> _restorePrimaryServer() async {
+  if (!ApiConfig.isLoggedIn) return;
+
+  final restored = await ServerEndpointService.restorePrimaryIfAvailable();
+  if (restored == null) return;
+
+  NetworkClient.reset();
+  await ApiConfig.setBaseUrl(restored);
 }
 
 class MyApp extends StatelessWidget {

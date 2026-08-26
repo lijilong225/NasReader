@@ -6,6 +6,7 @@ import 'package:nas_reader/config/api_config.dart';
 import 'package:nas_reader/config/theme_manager.dart'; // 👈 引入 ThemeManager
 import 'package:nas_reader/core/network_client.dart';
 import 'package:nas_reader/services/auth_service.dart';
+import 'package:nas_reader/services/server_endpoint_service.dart';
 import 'package:nas_reader/services/server_profile_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -418,8 +419,27 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
 }
 
 /// 账号信息二级页面（包含退出登录）
-class AccountCenterPage extends StatelessWidget {
+class AccountCenterPage extends StatefulWidget {
   const AccountCenterPage({super.key});
+
+  @override
+  State<AccountCenterPage> createState() => _AccountCenterPageState();
+}
+
+class _AccountCenterPageState extends State<AccountCenterPage> {
+  ServerEndpoints _endpoints = const ServerEndpoints();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadEndpoints();
+  }
+
+  Future<void> _loadEndpoints() async {
+    final endpoints = await ServerEndpointService.load();
+    if (!mounted) return;
+    setState(() => _endpoints = endpoints);
+  }
 
   Future<void> _handleLogout(BuildContext context) async {
     final confirm = await showDialog<bool>(
@@ -471,6 +491,18 @@ class AccountCenterPage extends StatelessWidget {
       ),
       (route) => false,
     );
+  }
+
+  Future<void> _openServerEditor() async {
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const ServerEndpointEditorPage()),
+    );
+
+    if (changed != true) return;
+    await _loadEndpoints();
+    if (!mounted) return;
+    setState(() {});
   }
 
   Future<void> _openChangePassword(BuildContext context) async {
@@ -556,12 +588,35 @@ class AccountCenterPage extends StatelessWidget {
             child: Column(
               children: [
                 ListTile(
-                  leading: const Icon(Icons.cloud_outlined, color: Colors.blueAccent),
-                  title: const Text('远端服务地址', style: TextStyle(fontSize: 14)),
+                  leading: Icon(
+                    _endpoints.usingBackup ? Icons.backup_outlined : Icons.cloud_outlined,
+                    color: _endpoints.usingBackup ? Colors.orange : Colors.blueAccent,
+                  ),
+                  title: const Text('当前生效服务器', style: TextStyle(fontSize: 14)),
                   subtitle: Text(
                     ApiConfig.baseUrl.isNotEmpty ? ApiConfig.baseUrl : '未配置',
                     style: const TextStyle(fontSize: 12),
                   ),
+                  trailing: Text(
+                    _endpoints.usingBackup ? '备用' : '主服务',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: _endpoints.usingBackup ? Colors.orange : Colors.blueAccent,
+                    ),
+                  ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.dns_outlined, color: Color(0xFF5A4A3A)),
+                  title: const Text('服务器地址配置', style: TextStyle(fontSize: 14)),
+                  subtitle: Text(
+                    '主：${_endpoints.primary.isNotEmpty ? _endpoints.primary : "未配置"}\n'
+                    '备用：${_endpoints.hasBackup ? _endpoints.backup : "未配置"}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _openServerEditor,
                 ),
                 const Divider(height: 1),
                 ListTile(
@@ -609,6 +664,184 @@ class AccountCenterPage extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 主/备服务器地址编辑页：保存时重新探测并切换生效地址
+class ServerEndpointEditorPage extends StatefulWidget {
+  const ServerEndpointEditorPage({super.key});
+
+  @override
+  State<ServerEndpointEditorPage> createState() => _ServerEndpointEditorPageState();
+}
+
+class _ServerEndpointEditorPageState extends State<ServerEndpointEditorPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _primaryController = TextEditingController();
+  final _backupController = TextEditingController();
+
+  bool _isLoading = true;
+  bool _isSubmitting = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final endpoints = await ServerEndpointService.load();
+    if (!mounted) return;
+    setState(() {
+      _primaryController.text =
+          endpoints.primary.isNotEmpty ? endpoints.primary : ApiConfig.baseUrl;
+      _backupController.text = endpoints.backup;
+      _isLoading = false;
+    });
+  }
+
+  @override
+  void dispose() {
+    _primaryController.dispose();
+    _backupController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() {
+      _isSubmitting = true;
+      _errorMessage = null;
+    });
+
+    final primary = ServerProfileService.normalizeUrl(_primaryController.text);
+    final backup = ServerProfileService.normalizeUrl(_backupController.text);
+
+    try {
+      final pick = await ServerEndpointService.pickAvailable(
+        primary: primary,
+        backup: backup,
+      );
+
+      if (pick == null) {
+        setState(() {
+          _errorMessage = backup.isEmpty
+              ? '主服务器无法连接，请检查地址'
+              : '主服务器与备用服务器均无法连接';
+        });
+        return;
+      }
+
+      await ServerEndpointService.save(
+        primary: primary,
+        backup: backup,
+        usingBackup: pick.usingBackup,
+      );
+
+      // 地址变更后必须重建 Dio，否则旧 baseUrl 会被单例继续复用
+      NetworkClient.reset();
+      await ApiConfig.setBaseUrl(pick.url);
+      await AuthService.saveBaseUrl(pick.url);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            pick.usingBackup ? '主服务器不可用，已切换到备用服务器' : '已切换到主服务器',
+          ),
+        ),
+      );
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _errorMessage = '保存失败: $e');
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  String? _validateUrl(String? value, {required bool required}) {
+    final text = (value ?? '').trim();
+    if (text.isEmpty) return required ? '请输入服务器地址' : null;
+
+    final uri = Uri.tryParse(text);
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+      return '请输入完整地址，例如 http://nas:6088';
+    }
+    if (uri.scheme != 'http' && uri.scheme != 'https') {
+      return '仅支持 http 或 https';
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('服务器地址')),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextFormField(
+                      controller: _primaryController,
+                      keyboardType: TextInputType.url,
+                      decoration: const InputDecoration(
+                        labelText: '主服务地址',
+                        prefixIcon: Icon(Icons.dns_outlined),
+                        border: OutlineInputBorder(),
+                      ),
+                      validator: (v) => _validateUrl(v, required: true),
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _backupController,
+                      keyboardType: TextInputType.url,
+                      decoration: const InputDecoration(
+                        labelText: '备用服务地址（可选）',
+                        helperText: '主服务器不可用时自动尝试此地址',
+                        prefixIcon: Icon(Icons.backup_outlined),
+                        border: OutlineInputBorder(),
+                      ),
+                      validator: (v) => _validateUrl(v, required: false),
+                    ),
+                    if (_errorMessage != null) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        _errorMessage!,
+                        style: const TextStyle(color: Colors.red, fontSize: 13),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                    const SizedBox(height: 24),
+                    FilledButton(
+                      onPressed: _isSubmitting ? null : _submit,
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        backgroundColor: const Color(0xFF382E25),
+                      ),
+                      child: _isSubmitting
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text('检测并保存'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
     );
   }
 }

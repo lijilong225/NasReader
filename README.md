@@ -1,67 +1,85 @@
 
----
+# NAS Reader — 私有云电子书阅读与同步系统
 
-# NAS Reader - 私有云电子书阅读与同步系统
+面向 NAS / 私有服务器用户的电子书阅读方案。前后端分离：移动端 Flutter，后端 Go (Gin) + SQLite。
 
----
-
-## 📖 项目简介
-
-**NAS Reader** 是一套专为 NAS（网络附加存储）及私有服务器用户打造的电子书阅读解决方案。采用**前后端分离**架构，移动端使用 Flutter 开发，后端基于 Go (Gin) 驱动。
-
-系统支持直接浏览 NAS 挂载目录，流式读取与缓存 **TXT** 和 **EPUB** 格式书籍，并具备多端阅读进度云端同步、暗黑模式切换、本地缓存管理及内置网络诊断日志等功能。
+直接浏览 NAS 挂载目录，流式读取并缓存 **TXT** / **EPUB** 书籍，跨设备同步阅读进度与书签，支持主备服务器自动切换、多套排版与阅读主题，以及内置网络诊断浮窗。
 
 ---
 
 ## ✨ 核心特性
 
-* 📂 **NAS 目录云端直连**：递归浏览 NAS 目录结构，支持文件夹层级跳转与文件类型快速过滤。
-* 📚 **多格式图书阅读**：
-* **TXT**：分页流式加载，降低大文件内存占用。
-* **EPUB**：原生排版解析，保留章节结构与插图。
+### 阅读体验
 
+* **TXT 全文排版引擎**：预分页 + 流式加载，大文件低内存占用。
+* **EPUB 原生重排**：基于本地化的 `epub.js` + `jszip`（打包进 assets，离线可用且规避 CDN 供应链风险），保留章节结构与插图。
+* **跟手翻页动效**：自研 `PageTurnView`，拖拽跟手、松手回弹。
+* **手势热区定制**：常规手势 / 单手模式，九宫格热区可配置。
+* **排版设置**：字号、行高、字间距、段首缩进（中文全角双空格）、自定义字体导入。
+* **四套阅读主题**：羊皮纸 / 护眼 / 暗黑 / 纯白。
+* **应用主题**：Material 3，浅色 / 深色 / 跟随系统。
 
-* 🔄 **跨设备进度同步**：采用快速文件指纹（首尾哈希）识别同源书籍，自动同步多端阅读百分比与章节进度。
-* 🔐 **轻量鉴权安全**：基于 JWT 的身份认证与鉴权，针对私有 NAS 环境设计，支持动态配置服务器地址。
-* 🎨 **现代化 UI & 个性化设置**：
-* 支持 Material 3 设计规范。
-* 支持浅色模式 / 深色模式（Dark Mode）/ 跟随系统。
-* 本地缓存管理，一键查看占用容量并支持缓存清理。
+### 书库与同步
 
+* **NAS 目录直连**：递归浏览目录树，隐藏文件自动过滤，按扩展名识别 TXT / EPUB。
+* **文件指纹识别**：服务端为每个文件生成稳定 `book_id`（首尾哈希 + 体积），跨设备定位同一本书，不依赖文件路径。
+* **进度同步**：百分比 + 定位符（TXT 字节偏移 / EPUB CFI），并记录来源设备。
+* **书签双向同步**：LWW（Last-Write-Wins）合并策略 + 软删除标记，避免多端互相覆盖。
+* **云端记录批量清理**：删除本地书籍时可一并清除服务端进度与书签。
+* **EPUB 封面提取**：本地解析并缓存封面用于书架展示。
+* **本地缓存管理**：查看占用容量并一键清理。
 
-* 🛠 **内置网络日志诊断**：内置内存 HTTP 抓包浮窗，在真机无控制台连接环境下即可实时排查 API 404/500 异常。
-* 🚀 **自动化 CI/CD**：集成 GitHub Actions，Git Tag 推送后自动注入版本号并构建分发 `NasReader-<Tag>.apk`。
+### 安全与运维
+
+* **JWT 鉴权**：`JWT_SECRET` 未设置或短于 32 字节时服务拒绝启动。
+* **邀请码注册**：`REGISTRATION_INVITE_CODE` 留空即完全关闭注册接口；常量时间比对。
+* **登录限流**：内存计数器，15 分钟内失败 5 次锁定 15 分钟；用户不存在时执行等时哈希比对，抵御用户名枚举。
+* **路径穿越防护**：所有文件访问经 `SafeResolvePath` 校验，越界请求返回 403。
+* **CORS 白名单**：默认拒绝全部浏览器跨域请求，仅放行 `CORS_ALLOWED_ORIGINS` 显式配置的来源（原生客户端不受影响）。
+* **凭据安全存储**：Token 与服务器密码存于 `flutter_secure_storage`（Android 启用 EncryptedSharedPreferences），「记住密码」可关闭。
+* **主备服务器自动切换**：通过 `/health` 探针检测主服务器可用性，不可用时自动降级到备用地址。
+* **网络诊断浮窗**：内存态 HTTP 抓包，真机无控制台时也能排查 4xx / 5xx。
+* **自动化 CI/CD**：Git Tag 推送后自动构建签名 APK 与多架构 Docker 镜像。
 
 ---
 
-## 🏗 技术架构与技术栈
+## 🏗 技术栈
 
-### 技术选型
-
-| 模块 | 技术栈 | 说明 |
+| 模块 | 技术选型 | 说明 |
 | --- | --- | --- |
-| **前端 (Android/iOS)** | Flutter 3.x / Dart | 跨平台移动端开发 |
-| **网络请求** | Dio 5.x | 支持拦截器、Token 自动附加、Range 文件下载 |
-| **本地持久化** | `shared_preferences` / `path_provider` | 配置项、Token 存储与本地书籍沙盒管理 |
-| **后端 API** | Go 1.21+ / Gin | 高性能轻量 RESTful API 引擎 |
-| **数据库** | SQLite / GORM | 存储用户数据与阅读进度（单文件零运维） |
-| **持续集成** | GitHub Actions | 自动化 APK 构建、语义化版本注入与 Release 发布 |
+| 移动端 | Flutter 3.x / Dart 3 | 以 Android 为主，代码跨平台 |
+| 网络 | Dio 5 | 拦截器、Token 自动附加、Range 断点下载 |
+| 本地存储 | `shared_preferences` / `path_provider` | 书架数据、配置项、书籍沙盒 |
+| 安全存储 | `flutter_secure_storage` | Token 与服务器密码 |
+| EPUB 渲染 | `webview_flutter` + `shelf_static` + `archive` + `xml` | 本地静态服务托管解包后的 EPUB |
+| 后端 | Go 1.22 / Gin 1.9 | 轻量 RESTful API |
+| 数据库 | SQLite（`glebarez/sqlite`）/ GORM | 纯 Go 驱动无 CGO，WAL 模式 |
+| 鉴权 | `golang-jwt/v5` + `bcrypt` | — |
+| CI/CD | GitHub Actions | APK 签名构建 + `linux/amd64,linux/arm64` 镜像推送 ghcr.io |
 
-### 核心 API 设计
+---
+
+## 🔌 API
+
+统一前缀 `/api/v1`。除 `/health`、`/auth/register`、`/auth/login` 外均需 `Authorization: Bearer <token>`。
 
 ```text
 /api/v1
+├── GET  /health                    # 健康探针（主备切换用）
 ├── /auth
-│   ├── POST /login         # 用户登录获取 JWT
-│   └── POST /register      # 新用户注册 (可选)
+│   ├── POST /register              # 注册，需邀请码；限流
+│   ├── POST /login                 # 登录获取 JWT；限流
+│   └── POST /password              # 修改密码（需登录态）
 ├── /files
-│   ├── GET  /browse        # 浏览 NAS 目录结构 (?path=/...)
-│   └── GET  /download      # 支持 Range 断点续传的文件下载
+│   ├── GET  /browse?path=/         # 浏览 NAS 目录，返回带 book_id 的节点
+│   └── GET  /download?path=...     # 支持 Range 的文件下载
 └── /sync
-    ├── GET  /progress      # 获取所有书籍阅读进度
-    ├── GET  /progress/:id  # 获取单本书籍进度
-    └── POST /progress      # 提交并更新最新阅读进度
-
+    ├── GET  /progress              # 全部书籍进度
+    ├── GET  /progress/:book_id     # 单本进度
+    ├── POST /progress              # 上报进度
+    ├── GET  /bookmarks/:book_id    # 拉取书签
+    ├── POST /bookmarks             # 书签双向合并（LWW）
+    └── POST /delete                # 批量清除书籍的进度与书签
 ```
 
 ---
@@ -69,107 +87,114 @@
 ## 📂 项目结构
 
 ```text
-nas-reader/
-├── .github/
-│   └── workflows/
-│       └── build-frontend-apk.yml   # 自动编译与 Release 打包流
-├── backend/                         # Go 后端服务
-│   ├── config/                      # 数据库与全局配置
-│   ├── handlers/                    # 路由业务逻辑 (文件浏览/下载/同步)
-│   ├── middleware/                  # JWT 鉴权与 CORS 中间件
-│   ├── models/                      # 数据库实体定义
-│   └── main.go                      # 后端入口
-└── frontend/                        # Flutter 前端项目
+NasReader/
+├── .github/workflows/
+│   ├── build-frontend-apk.yml       # Tag 触发：签名 APK 构建 + Release 发布
+│   └── build-backend-docker.yml     # Tag 触发：多架构镜像推送 ghcr.io
+├── backend/
+│   ├── config/database.go           # SQLite 连接、历史数据去重、AutoMigrate
+│   ├── handlers/                    # auth / storage / progress / bookmark / delete
+│   ├── middleware/                  # auth.go（JWT）、ratelimit.go（登录限流）
+│   ├── models/                      # user / progress / bookmark
+│   ├── utils/safe_path.go           # 路径穿越防护
+│   ├── Dockerfile                   # 多阶段静态编译 → alpine
+│   ├── docker-compose.yml
+│   └── main.go                      # 路由注册与 CORS
+└── frontend/
+    ├── assets/js/                   # epub.min.js / jszip.min.js（本地化）
     ├── lib/
-    │   ├── pages/                   # 本地书架 / NAS 浏览器 / 设置 / 登录
-    │   ├── readers/                 # TXT / EPUB 阅读器核心渲染组件
-    │   ├── services/                # AuthService / AppLogger 网络与存储服务
-    │   ├── main_navigation_container.dart # 底部主导航容器
-    │   └── main.dart                # 应用入口与全局主题管理
-    └── pubspec.yaml                 # 前端依赖配置
-
+    │   ├── config/                  # api_config / theme_manager
+    │   ├── core/                    # 排版引擎、翻页视图、字体、指纹、网络客户端、阅读主题、手势模式
+    │   ├── models/                  # bookmark_model
+    │   ├── pages/                   # 登录 / 本地书架 / NAS 浏览器 / 设置
+    │   ├── readers/                 # stream_txt_reader / epub_reader
+    │   ├── services/                # 鉴权、进度同步、书签同步、服务器端点与档案、封面提取、日志
+    │   ├── widgets/                 # 阅读器抽屉、排版设置、手势热区
+    │   ├── main_navigation_container.dart
+    │   └── main.dart
+    ├── test/                        # 指纹、书签、服务器档案等单元测试
+    └── pubspec.yaml
 ```
 
 ---
 
-## 🚀 快速上手与部署
+## 🚀 部署
 
-### 1. 后端部署 (Go)
+### 后端
 
-#### 本地 / 物理机运行
+#### 环境变量
+
+| 变量 | 必填 | 说明 |
+| --- | --- | --- |
+| `JWT_SECRET` | ✅ | JWT 签名密钥，至少 32 字节；缺失或过短时服务拒绝启动。生成：`openssl rand -base64 48` |
+| `NAS_BOOKS_DIR` | 建议 | 书库物理根目录，默认 `/nas/books`；所有文件访问被限制在此目录内 |
+| `REGISTRATION_INVITE_CODE` | — | 注册邀请码。**留空则完全关闭注册接口**，建议长度 ≥ 8 |
+| `CORS_ALLOWED_ORIGINS` | — | 逗号分隔的浏览器来源白名单；留空则拒绝所有跨域请求 |
+| `GIN_MODE` | — | 生产环境设为 `release` |
+
+数据库文件固定生成在工作目录下的 `data/reader.db`，容器部署需挂载该目录以持久化。
+
+#### Docker Compose（推荐）
 
 ```bash
 cd backend
 
-# 指定 NAS 书籍物理存储路径（默认 /nas/books）
-export NAS_BOOKS_DIR="/your/nas/books/path"
+cat > .env <<EOF
+JWT_SECRET=$(openssl rand -base64 48)
+REGISTRATION_INVITE_CODE=$(openssl rand -hex 12)
+EOF
 
-# 下载依赖并运行
-go mod tidy
-go run main.go
-
+docker compose up -d
 ```
 
-#### Docker Compose 部署 (推荐)
+`docker-compose.yml` 默认将 `/volume1/Books` 只读挂载到容器内 `/nas/books`，按自己的 NAS 路径调整。也可直接使用 CI 推送的镜像：
 
 ```yaml
-version: '3.8'
-
-services:
-  nas-reader-server:
-    image: golang:1.21-alpine
-    working_dir: /app
-    volumes:
-      - ./backend:/app
-      - /volume1/books:/nas/books:ro  # 挂载 NAS 实际书籍目录
-    environment:
-      - NAS_BOOKS_DIR=/nas/books
-      - GIN_MODE=release
-    ports:
-      - "6088:8080"
-    command: go run main.go
-    restart: unless-stopped
-
+image: ghcr.io/<owner>/<repo>/reader-sync:latest
 ```
 
----
+#### 本地运行
 
-### 2. 前端开发与打包 (Flutter)
+```bash
+cd backend
+export JWT_SECRET="$(openssl rand -base64 48)"
+export NAS_BOOKS_DIR="/your/nas/books"
+export REGISTRATION_INVITE_CODE="your-invite-code"
+go mod download
+go run main.go        # 监听 :8080
+```
 
-#### 运行与调试
+#### 测试
+
+```bash
+cd backend && go test ./...
+```
+
+### 前端
 
 ```bash
 cd frontend
-
-# 安装依赖
 flutter pub get
-
-# 启动调试
-flutter run
-
+flutter run                  # 调试
+flutter test                 # 单元测试
+flutter build apk --release  # 本地打包
 ```
 
-#### 本地手动构建 Release APK
+首次启动在登录页填写服务器地址（如 `http://192.168.1.10:6088`），可另填备用地址；主服务器探测失败时自动切换。注册需要服务端配置的邀请码。
 
-```bash
-flutter build apk --release --build-name=1.0.0 --build-number=1
+#### 自动发布
 
-```
-
-#### 通过 GitHub Actions 自动化发布
-
-只需要打上语义化版本 Tag 并推送到远程仓库：
+APK 签名依赖以下 GitHub Secrets：`KEYSTORE_BASE64`、`KEYSTORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD`。
 
 ```bash
 git tag v1.0.0
 git push origin v1.0.0
-
 ```
 
-GitHub Actions 会自动编译生成名为 **`NasReader-v1.0.0.apk`** 的安装包，并发布至 GitHub Releases。
+Tag 推送后自动产出 `NasReader-v1.0.0.apk` 并发布至 GitHub Releases，同时构建并推送后端多架构镜像。
 
 ---
 
 ## 📝 开源协议
 
-本项目基于 [MIT License](https://www.google.com/search?q=LICENSE) 协议开源。
+本项目基于 [MIT License](LICENSE) 开源。

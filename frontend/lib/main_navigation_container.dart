@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 
+import 'pages/favorites_page.dart';
 import 'pages/file_browser_page.dart';
 import 'pages/local_bookshelf_page.dart';
 import 'pages/settings_page.dart';
@@ -22,6 +23,7 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
 
   // 挂载 Key 用于 Tab 切换时联动刷新
   final GlobalKey<LocalBookshelfPageState> _bookshelfKey = GlobalKey<LocalBookshelfPageState>();
+  final GlobalKey<FavoritesPageState> _favoritesKey = GlobalKey<FavoritesPageState>();
   // 用于在切到设置页时主动触发缓存统计刷新
   final GlobalKey<SettingsPageState> _settingsKey = GlobalKey<SettingsPageState>();
 
@@ -33,6 +35,10 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
     _pages = [
       LocalBookshelfPage(
         key: _bookshelfKey,
+        dio: widget.dio,
+      ),
+      FavoritesPage(
+        key: _favoritesKey,
         dio: widget.dio,
       ),
       FileBrowserPage(dio: widget.dio),
@@ -52,8 +58,12 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
     if (index == 0) {
       _bookshelfKey.currentState?.loadLocalBooks();
     }
-    // 2. 切到「系统设置」(index = 2) 时自动刷新缓存大小
-    if (index == 2) {
+    // 2. 切到「收藏夹」(index = 1) 时刷新收藏列表
+    if (index == 1) {
+      _favoritesKey.currentState?.loadFavorites();
+    }
+    // 3. 切到「系统设置」(index = 3) 时自动刷新缓存大小
+    if (index == 3) {
       _settingsKey.currentState?.calculateCacheSize();
     }
   }
@@ -79,6 +89,11 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
             icon: Icon(Icons.book_outlined),
             activeIcon: Icon(Icons.book),
             label: '本地书架',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.star_border),
+            activeIcon: Icon(Icons.star),
+            label: '收藏夹',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.cloud_outlined),

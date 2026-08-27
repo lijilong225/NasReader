@@ -102,7 +102,11 @@ func main() {
 			syncGroup.GET("/bookmarks/:book_id", handlers.GetBookmarks)
 			syncGroup.POST("/bookmarks", handlers.SyncBookmarks)
 
-			// 3. 批量删除书籍云端记录（进度 + 书签）
+			// 3. 收藏夹双向同步
+			syncGroup.GET("/favorites", handlers.GetFavorites)
+			syncGroup.POST("/favorites", handlers.SyncFavorites)
+
+			// 4. 批量删除书籍云端记录（进度 + 书签 + 收藏）
 			syncGroup.POST("/delete", handlers.DeleteBookSyncData)
 		}
 

@@ -36,11 +36,12 @@ func InitDB() {
 	// 3. 建唯一索引前先清理历史重复行，否则 AutoMigrate 会失败
 	dedupeReadingProgress()
 
-	// 4. 自动迁移数据表结构（增加 models.Bookmark）
+	// 4. 自动迁移数据表结构
 	err = DB.AutoMigrate(
 		&models.User{},
 		&models.ReadingProgress{},
-		&models.Bookmark{}, // 👈 新增书签表迁移
+		&models.Bookmark{},
+		&models.Favorite{},
 	)
 	if err != nil {
 		log.Fatalf("数据库表自动迁移失败: %v", err)

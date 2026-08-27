@@ -25,7 +25,8 @@
 * **文件指纹识别**：服务端为每个文件生成稳定 `book_id`（首尾哈希 + 体积），跨设备定位同一本书，不依赖文件路径。
 * **进度同步**：百分比 + 定位符（TXT 字节偏移 / EPUB CFI），并记录来源设备。
 * **书签双向同步**：LWW（Last-Write-Wins）合并策略 + 软删除标记，避免多端互相覆盖。
-* **云端记录批量清理**：删除本地书籍时可一并清除服务端进度与书签。
+* **收藏夹云同步**：书架与 NAS 书库均可一键收藏，按账号绑定并跨设备同步；同样采用 LWW + 墓碑软删除（保留 30 天），离线可用、登录后自动合并，登出即清除本机副本。
+* **云端记录批量清理**：删除本地书籍时可一并清除服务端进度、书签与收藏。
 * **EPUB 封面提取**：本地解析并缓存封面用于书架展示。
 * **本地缓存管理**：查看占用容量并一键清理。
 
@@ -79,7 +80,9 @@
     ├── POST /progress              # 上报进度
     ├── GET  /bookmarks/:book_id    # 拉取书签
     ├── POST /bookmarks             # 书签双向合并（LWW）
-    └── POST /delete                # 批量清除书籍的进度与书签
+    ├── GET  /favorites             # 拉取收藏夹
+    ├── POST /favorites             # 收藏夹双向合并（LWW）
+    └── POST /delete                # 批量清除书籍的进度、书签与收藏
 ```
 
 ---
@@ -93,9 +96,9 @@ NasReader/
 │   └── build-backend-docker.yml     # Tag 触发：多架构镜像推送 ghcr.io
 ├── backend/
 │   ├── config/database.go           # SQLite 连接、历史数据去重、AutoMigrate
-│   ├── handlers/                    # auth / storage / progress / bookmark / delete
+│   ├── handlers/                    # auth / storage / progress / bookmark / favorite / delete
 │   ├── middleware/                  # auth.go（JWT）、ratelimit.go（登录限流）
-│   ├── models/                      # user / progress / bookmark
+│   ├── models/                      # user / progress / bookmark / favorite
 │   ├── utils/safe_path.go           # 路径穿越防护
 │   ├── Dockerfile                   # 多阶段静态编译 → alpine
 │   ├── docker-compose.yml
@@ -105,14 +108,14 @@ NasReader/
     ├── lib/
     │   ├── config/                  # api_config / theme_manager
     │   ├── core/                    # 排版引擎、翻页视图、字体、指纹、网络客户端、阅读主题、手势模式
-    │   ├── models/                  # bookmark_model
-    │   ├── pages/                   # 登录 / 本地书架 / NAS 浏览器 / 设置
-    │   ├── readers/                 # stream_txt_reader / epub_reader
-    │   ├── services/                # 鉴权、进度同步、书签同步、服务器端点与档案、封面提取、日志
-    │   ├── widgets/                 # 阅读器抽屉、排版设置、手势热区
+│   │   ├── models/                  # bookmark_model / favorite_book
+│   │   ├── pages/                   # 登录 / 本地书架 / NAS 浏览器 / 收藏夹 / 设置
+│   │   ├── readers/                 # stream_txt_reader / epub_reader
+│   │   ├── services/                # 鉴权、进度同步、书签同步、收藏同步、服务器端点与档案、封面提取、日志
+│   │   ├── widgets/                 # 阅读器抽屉、排版设置、手势热区、收藏按钮
     │   ├── main_navigation_container.dart
     │   └── main.dart
-    ├── test/                        # 指纹、书签、服务器档案等单元测试
+    ├── test/                        # 指纹、书签、收藏、服务器档案等单元测试
     └── pubspec.yaml
 ```
 

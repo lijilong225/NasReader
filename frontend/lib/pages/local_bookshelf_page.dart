@@ -6,9 +6,11 @@ import 'package:path/path.dart' as p;
 
 import '../core/book_fingerprint.dart';
 import '../services/progress_sync_service.dart';
+import '../services/favorite_service.dart';
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
 import '../services/app_logger.dart';
+import '../widgets/book_leading_icon.dart';
 
 class BookshelfItem {
   final String bookId;
@@ -61,19 +63,44 @@ class LocalBookshelfPage extends StatefulWidget {
 
 class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBindingObserver {
   List<BookshelfItem> _books = [];
+  Set<String> _favoriteIds = {};
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    FavoriteService.revision.addListener(_refreshFavoriteIds);
     loadLocalBooks();
   }
 
   @override
   void dispose() {
+    FavoriteService.revision.removeListener(_refreshFavoriteIds);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  Future<void> _refreshFavoriteIds() async {
+    final ids = await FavoriteService.getFavoriteIds();
+    if (mounted) setState(() => _favoriteIds = ids);
+  }
+
+  Future<void> _toggleFavorite(BookshelfItem book) async {
+    final added = await FavoriteService.toggle(
+      bookId: book.bookId,
+      title: book.title,
+      fileName: book.fileName,
+      remotePath: book.remotePath,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(added ? '已收藏《${book.title}》' : '已取消收藏《${book.title}》'),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   @override
@@ -99,6 +126,8 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
       if (widget.dio != null) {
         await ProgressSyncService.syncWithRemote(widget.dio!);
       }
+      // 书架是启动首页，在此拉一次账号维度的收藏夹（未登录时内部会直接返回本地）
+      await FavoriteService.syncWithServer();
 
       final progressList = await ProgressSyncService.getAllLocalProgress();
 
@@ -167,9 +196,12 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
       final resultList = mergedItems.values.toList()
         ..sort((a, b) => b.lastReadTime.compareTo(a.lastReadTime));
 
+      final favoriteIds = await FavoriteService.getFavoriteIds();
+
       if (mounted) {
         setState(() {
           _books = resultList;
+          _favoriteIds = favoriteIds;
           _isLoading = false;
         });
       }
@@ -391,10 +423,11 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
         final isEpub = book.extension == '.epub';
 
         return ListTile(
-          leading: Icon(
-            isEpub ? Icons.menu_book : Icons.description,
-            color: isEpub ? Colors.green : Colors.blue,
-            size: 28,
+          leading: BookLeadingIcon(
+            icon: isEpub ? Icons.menu_book : Icons.description,
+            iconColor: isEpub ? Colors.green : Colors.blue,
+            isFavorite: _favoriteIds.contains(book.bookId),
+            onToggleFavorite: () => _toggleFavorite(book),
           ),
           title: Text(
             book.title,

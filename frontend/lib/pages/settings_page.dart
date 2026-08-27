@@ -6,6 +6,7 @@ import 'package:nas_reader/config/api_config.dart';
 import 'package:nas_reader/config/theme_manager.dart'; // 👈 引入 ThemeManager
 import 'package:nas_reader/core/network_client.dart';
 import 'package:nas_reader/services/auth_service.dart';
+import 'package:nas_reader/services/favorite_service.dart';
 import 'package:nas_reader/services/server_endpoint_service.dart';
 import 'package:nas_reader/services/server_profile_service.dart';
 import 'package:path_provider/path_provider.dart';
@@ -470,6 +471,8 @@ class _AccountCenterPageState extends State<AccountCenterPage> {
     try {
       await ApiConfig.onLogout();
       await AuthService.clearAuth();
+      // 收藏夹按账号维度同步，登出后必须清本地副本防止账号间串数据
+      await FavoriteService.clearLocal();
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('jwt_token');

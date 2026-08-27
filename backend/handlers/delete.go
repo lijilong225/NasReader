@@ -44,6 +44,12 @@ func DeleteBookSyncData(c *gin.Context) {
 			return err
 		}
 
+		// 删除收藏
+		if err := tx.Where("user_id = ? AND book_id = ?", userID, req.BookID).
+			Delete(&models.Favorite{}).Error; err != nil {
+			return err
+		}
+
 		return nil
 	})
 
@@ -54,7 +60,7 @@ func DeleteBookSyncData(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
-		"message": "书籍云端阅读记录与书签已彻底删除",
+		"message": "书籍云端阅读记录、书签与收藏已彻底删除",
 		"book_id": req.BookID,
 	})
 }

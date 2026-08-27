@@ -10,7 +10,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
 import '../services/progress_sync_service.dart';
+import '../services/favorite_service.dart';
 import '../services/app_logger.dart';
+import '../widgets/book_leading_icon.dart';
 
 enum FileSortType {
   nameAsc('名称 (A-Z)'),
@@ -91,13 +93,44 @@ class FileBrowserPageState extends State<FileBrowserPage> {
 
   FileSortType _currentSort = FileSortType.timeDesc;
   final Set<String> _cachedFileNames = {};
+  Set<String> _favoriteIds = {};
 
   @override
   void initState() {
     super.initState();
     // 优先使用传入的 Dio，默认从 NetworkClient 获取（自动包含 ApiConfig.baseUrl 与 JWT Token）
     _dio = widget.dio ?? NetworkClient.getDio();
+    FavoriteService.revision.addListener(_refreshFavoriteIds);
     _initAndLoad();
+  }
+
+  @override
+  void dispose() {
+    FavoriteService.revision.removeListener(_refreshFavoriteIds);
+    super.dispose();
+  }
+
+  Future<void> _refreshFavoriteIds() async {
+    final ids = await FavoriteService.getFavoriteIds();
+    if (mounted) setState(() => _favoriteIds = ids);
+  }
+
+  Future<void> _toggleFavorite(NasFileItem item) async {
+    final title = p.basenameWithoutExtension(item.name);
+    final added = await FavoriteService.toggle(
+      bookId: item.syncBookId,
+      title: title,
+      fileName: item.name,
+      remotePath: item.path,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(added ? '已收藏《$title》' : '已取消收藏《$title》'),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   Future<void> _initAndLoad() async {
@@ -198,6 +231,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
 
     try {
       await _updateCachedFiles();
+      _favoriteIds = await FavoriteService.getFavoriteIds();
 
       final res = await _dio.get(
         '/api/v1/files/browse',
@@ -598,6 +632,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
           final item = _items[index];
           final ext = p.extension(item.name).toLowerCase();
           final isCached = !item.isDir && _isItemCached(item);
+          final isBook = !item.isDir && (ext == '.txt' || ext == '.epub');
 
           IconData iconData = Icons.insert_drive_file_outlined;
           Color iconColor = Colors.grey;
@@ -614,7 +649,14 @@ class FileBrowserPageState extends State<FileBrowserPage> {
           }
 
           return ListTile(
-            leading: Icon(iconData, color: iconColor, size: 28),
+            leading: isBook
+                ? BookLeadingIcon(
+                    icon: iconData,
+                    iconColor: iconColor,
+                    isFavorite: _favoriteIds.contains(item.syncBookId),
+                    onToggleFavorite: () => _toggleFavorite(item),
+                  )
+                : Icon(iconData, color: iconColor, size: 28),
             title: Row(
               children: [
                 Expanded(

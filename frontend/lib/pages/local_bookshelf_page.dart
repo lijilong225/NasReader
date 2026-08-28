@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/book_fingerprint.dart';
+import '../core/network_client.dart';
 import '../services/progress_sync_service.dart';
 import '../services/favorite_service.dart';
 import '../readers/stream_txt_reader_page.dart';
@@ -208,6 +209,155 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
     } catch (e) {
       AppLogger.log('❌ 刷新书架异常: $e');
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  /// 长按操作面板：收藏、移除书架、移入垃圾箱
+  Future<void> _showBookActions(BookshelfItem book) async {
+    final isFavorite = _favoriteIds.contains(book.bookId);
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(
+                book.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: Icon(
+                isFavorite ? Icons.star_border : Icons.star,
+                color: Colors.amber.shade700,
+              ),
+              title: Text(isFavorite ? '取消收藏' : '加入收藏'),
+              onTap: () => Navigator.pop(ctx, 'favorite'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_sweep_outlined, color: Colors.orange),
+              title: const Text('移除书架'),
+              onTap: () => Navigator.pop(ctx, 'remove'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+              title: const Text('移入垃圾箱'),
+              subtitle: const Text('同时从 NAS 书库移除', style: TextStyle(fontSize: 12)),
+              onTap: () => Navigator.pop(ctx, 'trash'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (action == null || !mounted) return;
+    switch (action) {
+      case 'favorite':
+        await _confirmToggleFavorite(book, isFavorite);
+        break;
+      case 'remove':
+        await _handleDeleteBook(book);
+        break;
+      case 'trash':
+        await _handleMoveToTrash(book);
+        break;
+    }
+  }
+
+  Future<void> _confirmToggleFavorite(BookshelfItem book, bool isFavorite) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(isFavorite ? '取消收藏' : '加入收藏'),
+        content: Text(
+          isFavorite
+              ? '确定要把《${book.title}》从收藏夹移除吗？'
+              : '确定要把《${book.title}》加入收藏夹吗？',
+          style: const TextStyle(fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(isFavorite ? '取消收藏' : '收藏'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true || !mounted) return;
+    await _toggleFavorite(book);
+  }
+
+  /// 移入 NAS 垃圾箱：先让服务端搬移原始文件，再清理本地书架痕迹
+  Future<void> _handleMoveToTrash(BookshelfItem book) async {
+    final hasRemote = book.remotePath.isNotEmpty;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('移入垃圾箱', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Text(
+          '确定要把《${book.title}》移入 NAS 垃圾箱吗？\n\n'
+          '${hasRemote ? '• NAS 书库中的原始文件会一并移入垃圾箱\n' : '• 该书未关联 NAS 书库文件，仅清理本地记录\n'}'
+          '• 本地缓存、阅读进度、书签与收藏将一并清除\n'
+          '• 可在“设置 - 垃圾箱”中查看或恢复文件',
+          style: const TextStyle(fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('移入垃圾箱', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true || !mounted) return;
+
+    final dio = widget.dio ?? NetworkClient.getDio();
+    try {
+      if (hasRemote) {
+        final remotePath =
+            book.remotePath.startsWith('/') ? book.remotePath : '/${book.remotePath}';
+        await dio.post('/api/v1/files/trash', data: {'path': remotePath});
+      }
+
+      if (book.localFile != null && await book.localFile!.exists()) {
+        await book.localFile!.delete();
+      }
+      await FavoriteService.remove(book.bookId);
+      await ProgressSyncService.deleteBookEverything(book.bookId, dio);
+
+      await loadLocalBooks();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已把《${book.title}》移入垃圾箱'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      AppLogger.log('❌ 移入垃圾箱失败: ${book.remotePath} -> $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('移入垃圾箱失败，请检查网络或服务端权限'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
     }
   }
 
@@ -466,7 +616,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
             color: Colors.grey,
           ),
           onTap: () => _openOrDownloadBook(book),
-          onLongPress: () => _handleDeleteBook(book), // 👈 长按触发删除弹窗
+          onLongPress: () => _showBookActions(book), // 👈 长按弹出操作面板
         );
       },
     );

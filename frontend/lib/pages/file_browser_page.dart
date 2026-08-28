@@ -494,6 +494,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
             file: file,
             title: title,
             initialCfi: initialCfi,
+            initialProgress: savedRecord.progress,
             onProgressChanged: (cfi, progress) {
               ProgressSyncService.updateProgress(
                 dio: _dio,

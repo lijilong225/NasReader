@@ -354,6 +354,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
             file: targetFile,
             title: book.title,
             initialCfi: initialCfi,
+            initialProgress: book.progressPercent,
             onProgressChanged: (cfi, progress) {
               ProgressSyncService.updateProgress(
                 dio: widget.dio,

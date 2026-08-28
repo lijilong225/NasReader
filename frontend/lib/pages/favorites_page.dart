@@ -206,6 +206,7 @@ class FavoritesPageState extends State<FavoritesPage> {
             file: file,
             title: book.title,
             initialCfi: saved?.epubCfi,
+            initialProgress: saved?.progress ?? 0.0,
             onProgressChanged: reportProgress,
           );
 

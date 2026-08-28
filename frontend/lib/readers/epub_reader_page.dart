@@ -47,6 +47,7 @@ class EpubReaderPage extends StatefulWidget {
   final String bookId;
   final String title;
   final String? initialCfi;
+  final double initialProgress;
   final Function(String cfi, double progressPercent)? onProgressChanged;
 
   const EpubReaderPage({
@@ -55,6 +56,7 @@ class EpubReaderPage extends StatefulWidget {
     required this.bookId,
     required this.title,
     this.initialCfi,
+    this.initialProgress = 0.0,
     this.onProgressChanged,
   });
 
@@ -87,6 +89,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   void initState() {
     super.initState();
     _currentCfi = widget.initialCfi ?? '';
+    _currentProgress = widget.initialProgress.clamp(0.0, 1.0);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadHandMode();
     _loadBookmarks();
@@ -233,7 +236,10 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
 
         case 'onRelocated':
           final cfi = data['cfi'] as String? ?? '';
-          final progress = (data['percentage'] as num?)?.toDouble() ?? 0.0;
+          final locationsReady = data['locationsReady'] as bool? ?? true;
+          final reported = (data['percentage'] as num?)?.toDouble() ?? 0.0;
+          // locations 索引生成完成前 percentage 恒为 0，此时沿用已有进度，避免把书架百分比冲成 0
+          final progress = locationsReady ? reported.clamp(0.0, 1.0) : _currentProgress;
           if (mounted) {
             setState(() {
               _currentCfi = cfi;
@@ -342,6 +348,22 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
         flow: "paginated"
       });
 
+      let locationsReady = false;
+
+      function postRelocated(cfi) {
+        let percentage = 0;
+        if (locationsReady && book.locations && book.locations.length()) {
+          const raw = book.locations.percentageFromCfi(cfi);
+          if (typeof raw === 'number' && !isNaN(raw)) percentage = raw;
+        }
+        FlutterChannel.postMessage(JSON.stringify({
+          type: 'onRelocated',
+          cfi: cfi,
+          percentage: percentage,
+          locationsReady: locationsReady
+        }));
+      }
+
       rendition.display($initialLocation).then(() => {
         FlutterChannel.postMessage(JSON.stringify({ type: 'onReady' }));
       }).catch(err => {
@@ -357,19 +379,18 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
 
       book.ready.then(() => {
         return book.locations.generate(600);
-      });
+      }).then(() => {
+        locationsReady = true;
+        // 索引就绪后补发一次当前位置，修正首屏上报的 0%
+        return Promise.resolve(rendition.currentLocation());
+      }).then((current) => {
+        if (current && current.start && current.start.cfi) {
+          postRelocated(current.start.cfi);
+        }
+      }).catch(() => {});
 
       rendition.on("relocated", function(location) {
-        const cfi = location.start.cfi;
-        let percentage = 0;
-        if (book.locations && book.locations.length()) {
-          percentage = book.locations.percentageFromCfi(cfi);
-        }
-        FlutterChannel.postMessage(JSON.stringify({
-          type: 'onRelocated',
-          cfi: cfi,
-          percentage: percentage
-        }));
+        postRelocated(location.start.cfi);
       });
 
       rendition.on("rendered", function(section, iframeView) {

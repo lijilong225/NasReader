@@ -12,6 +12,7 @@ import '../widgets/reader_drawer.dart';
 import '../widgets/typography_config.dart';
 import '../widgets/typography_settings_modal.dart';
 import '../services/app_logger.dart';
+import '../services/typography_prefs.dart';
 
 enum HandMode {
   standard('常规手势'),
@@ -91,9 +92,17 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     _currentCfi = widget.initialCfi ?? '';
     _currentProgress = widget.initialProgress.clamp(0.0, 1.0);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    _loadTypography();
     _loadHandMode();
     _loadBookmarks();
     _initWebView();
+  }
+
+  Future<void> _loadTypography() async {
+    final saved = await TypographyPrefs.load();
+    if (!mounted || saved == _typoConfig) return;
+    setState(() => _typoConfig = saved);
+    if (!_isLoading) _applyTypographyToEpub(saved);
   }
 
   @override
@@ -567,7 +576,9 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
       config: _typoConfig,
       showFontSection: false,
       onConfigChanged: (newConfig) {
+        if (newConfig == _typoConfig) return;
         setState(() => _typoConfig = newConfig);
+        TypographyPrefs.save(newConfig);
         _applyTypographyToEpub(newConfig);
       },
     );

@@ -32,6 +32,12 @@
       "languageVersion": "3.4"
     },
     {
+      "name": "charset",
+      "rootUri": "file:///Users/lijilong/.pub-cache/hosted/pub.dev/charset-2.0.1",
+      "packageUri": "lib/",
+      "languageVersion": "2.12"
+    },
+    {
       "name": "clock",
       "rootUri": "file:///Users/lijilong/.pub-cache/hosted/pub.dev/clock-1.1.2",
       "packageUri": "lib/",

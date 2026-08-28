@@ -5,9 +5,10 @@
   "packages": [
     {
       "name": "nas_reader",
-      "version": "0.6.4+68",
+      "version": "0.6.5+69",
       "dependencies": [
         "archive",
+        "charset",
         "connectivity_plus",
         "dio",
         "file_picker",
@@ -53,6 +54,11 @@
         "test_api",
         "vector_math"
       ]
+    },
+    {
+      "name": "charset",
+      "version": "2.0.1",
+      "dependencies": []
     },
     {
       "name": "package_info_plus",

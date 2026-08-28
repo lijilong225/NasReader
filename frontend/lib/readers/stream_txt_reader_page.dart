@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,7 @@ import '../core/page_turn_view.dart';
 import '../widgets/typography_config.dart';
 import '../widgets/typography_settings_modal.dart';
 import '../services/app_logger.dart';
+import '../services/typography_prefs.dart';
 import '../models/bookmark_model.dart';
 
 enum HandMode {
@@ -41,7 +43,8 @@ class StreamTxtReaderPage extends StatefulWidget {
   State<StreamTxtReaderPage> createState() => _StreamTxtReaderPageState();
 }
 
-class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
+class _StreamTxtReaderPageState extends State<StreamTxtReaderPage>
+    with WidgetsBindingObserver {
   bool _isLoading = true;
   String? _errorMessage;
   bool _showControls = false;
@@ -60,6 +63,11 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   HandMode _handMode = HandMode.standard;
   TypographyConfig _typoConfig = const TypographyConfig();
 
+  FullTxtContentLoader? _contentLoader;
+  FullTxtLayoutMetrics? _lastMetrics;
+  int _paginationGeneration = 0;
+  Timer? _repaginateDebounce;
+
   final GlobalKey<PageTurnViewState> _turnViewKey = GlobalKey<PageTurnViewState>();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
@@ -72,19 +80,53 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadHandMode();
-    _loadBookmarks(); 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _paginateEntireBook();
-    });
+    _loadBookmarks();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
+  }
+
+  Future<void> _bootstrap() async {
+    // 先取回持久化排版，避免用默认值白排一遍
+    final saved = await TypographyPrefs.load();
+    if (!mounted) return;
+    if (saved != _typoConfig) {
+      setState(() => _typoConfig = saved);
+    }
+    await _paginateEntireBook();
   }
 
   @override
   void dispose() {
     _saveCurrentProgress();
+    _repaginateDebounce?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _contentLoader?.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (!mounted || _isLoading || _pages.isEmpty) return;
+    _scheduleRepaginate(delay: const Duration(milliseconds: 350), onlyIfMetricsChanged: true);
+  }
+
+  void _scheduleRepaginate({
+    Duration delay = const Duration(milliseconds: 250),
+    bool onlyIfMetricsChanged = false,
+  }) {
+    _repaginateDebounce?.cancel();
+    _repaginateDebounce = Timer(delay, () {
+      if (!mounted) return;
+      if (onlyIfMetricsChanged && _buildMetrics() == _lastMetrics) return;
+      final offset =
+          _pages.isNotEmpty && _currentPageIndex < _pages.length
+              ? _pages[_currentPageIndex].startByteOffset
+              : 0;
+      _paginateEntireBook(targetByteOffset: offset);
+    });
   }
 
   Future<void> _loadHandMode() async {
@@ -123,7 +165,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         ? _toc[_currentChapterIndex].title
         : '第 ${_currentPageIndex + 1} 页';
         
-    final snippet = slice.content.replaceAll('\n', ' ').trim();
+    final snippet = _contentOf(slice).replaceAll('\n', ' ').trim();
     final displaySnippet = snippet.length > 60 ? '${snippet.substring(0, 60)}...' : snippet;
     final now = DateTime.now().millisecondsSinceEpoch;
 
@@ -194,35 +236,96 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     );
   }
 
-  Future<void> _paginateEntireBook({int? targetByteOffset}) async {
-    if (!widget.file.existsSync() || widget.file.lengthSync() == 0) {
-      setState(() {
-        _isLoading = false;
-        _errorMessage = '文件不存在或内容为空';
-      });
-      return;
+  /// 用 TextPainter 实测标定值，替代按等宽字符估算（compute isolate 内无法使用 TextPainter）
+  FullTxtLayoutMetrics _buildMetrics() {
+    final size = _getContentSize();
+    final bodyStyle = TextStyle(
+      fontSize: _typoConfig.fontSize,
+      height: _typoConfig.lineHeight,
+      letterSpacing: _typoConfig.letterSpacing,
+      fontFamily: _typoConfig.customFontFamily,
+    );
+    final titleStyle = TextStyle(
+      fontSize: _typoConfig.fontSize * 1.25,
+      fontWeight: FontWeight.bold,
+      height: 1.4,
+      letterSpacing: _typoConfig.letterSpacing + 0.5,
+      fontFamily: _typoConfig.customFontFamily,
+    );
+
+    final body = _measureStyle(bodyStyle);
+    final title = _measureStyle(titleStyle);
+
+    return FullTxtLayoutMetrics(
+      contentWidth: size.width,
+      contentHeight: size.height,
+      bodyAsciiWidth: body.asciiWidth,
+      bodyWideWidth: body.wideWidth,
+      bodyLineHeight: body.lineHeight,
+      titleAsciiWidth: title.asciiWidth,
+      titleWideWidth: title.wideWidth,
+      titleLineHeight: title.lineHeight,
+      indentFirstLine: _typoConfig.indentFirstLine,
+    );
+  }
+
+  _StyleMeasurement _measureStyle(TextStyle style) {
+    double widthOf(String sample) {
+      final painter = TextPainter(
+        text: TextSpan(text: sample, style: style),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      final width = painter.width / sample.length;
+      painter.dispose();
+      return width;
     }
 
-    setState(() => _isLoading = true);
+    final probe = TextPainter(
+      text: TextSpan(text: '中文Ag', style: style),
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+    )..layout();
+    final lineHeight = probe.height;
+    probe.dispose();
+
+    return _StyleMeasurement(
+      asciiWidth: widthOf('abcdefghijklmnopqrstuvwxyz0123456789'),
+      wideWidth: widthOf('汉字测量样本中文排版宽度基准值参照'),
+      lineHeight: lineHeight,
+    );
+  }
+
+  String _contentOf(FullTxtPageSlice slice) =>
+      _contentLoader?.contentOf(slice) ?? '';
+
+  Future<void> _paginateEntireBook({int? targetByteOffset}) async {
+    final generation = ++_paginationGeneration;
+    final metrics = _buildMetrics();
+    final offsetToLocate = targetByteOffset ?? widget.initialByteOffset;
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
 
     try {
-      final contentSize = _getContentSize();
-      final offsetToLocate = targetByteOffset ?? widget.initialByteOffset;
-
       final result = await FullTxtEngine.paginate(
-        FullTxtPaginationParams(
-          filePath: widget.file.path,
-          contentSize: contentSize,
-          fontSize: _typoConfig.fontSize,
-          lineHeight: _typoConfig.lineHeight,
-          letterSpacing: _typoConfig.letterSpacing,
-          indentFirstLine: _typoConfig.indentFirstLine,
-        ),
+        FullTxtPaginationParams(filePath: widget.file.path, metrics: metrics),
       );
 
-      if (!mounted) return;
+      if (!mounted || generation != _paginationGeneration) return;
 
       final targetPage = _locatePageByByteOffset(result.pages, offsetToLocate);
+
+      _contentLoader?.dispose();
+      _contentLoader = FullTxtContentLoader(
+        filePath: widget.file.path,
+        encoding: result.encoding,
+        metrics: metrics,
+      );
+      _lastMetrics = metrics;
+      _lastReportedOffset = -1; // 重排后页边界变了，去重基准需要重置
 
       setState(() {
         _pages = result.pages;
@@ -236,17 +339,24 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       _updateCurrentChapterByPageIndex(targetPage);
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || generation != _paginationGeneration) return;
         _turnViewKey.currentState?.jumpToPage(targetPage);
         _saveCurrentProgress();
       });
+    } on FullTxtEngineException catch (e) {
+      AppLogger.log('❌ 全本排版失败: $e');
+      if (!mounted || generation != _paginationGeneration) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = e.userMessage;
+      });
     } catch (e, stack) {
       AppLogger.log('❌ 全本排版异常: $e\n$stack');
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-          _errorMessage = '文本排版异常: $e';
-        });
-      }
+      if (!mounted || generation != _paginationGeneration) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = '文本排版失败，请稍后重试';
+      });
     }
   }
 
@@ -328,9 +438,10 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
       context,
       config: _typoConfig,
       onConfigChanged: (newConfig) {
-        final currentOffset = _pages.isNotEmpty ? _pages[_currentPageIndex].startByteOffset : 0;
+        if (newConfig == _typoConfig) return;
         setState(() => _typoConfig = newConfig);
-        _paginateEntireBook(targetByteOffset: currentOffset);
+        TypographyPrefs.save(newConfig);
+        _scheduleRepaginate();
       },
     );
   }
@@ -668,16 +779,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
         : widget.title;
 
     final hasChapterHeader = slice.chapterTitle != null && slice.chapterTitle!.isNotEmpty;
-
-    // 清洗正文：剥离开头残留的重复标题与空行
-    String cleanContent = slice.content;
-    if (hasChapterHeader) {
-      final title = slice.chapterTitle!.trim();
-      final trimmedContent = cleanContent.trimLeft();
-      if (trimmedContent.startsWith(title)) {
-        cleanContent = trimmedContent.substring(title.length).trimLeft();
-      }
-    }
+    final cleanContent = _contentOf(slice);
 
     return Container(
       color: _currentTheme.bgColor,
@@ -775,4 +877,16 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
      ),
     );
   }
+}
+
+class _StyleMeasurement {
+  final double asciiWidth;
+  final double wideWidth;
+  final double lineHeight;
+
+  const _StyleMeasurement({
+    required this.asciiWidth,
+    required this.wideWidth,
+    required this.lineHeight,
+  });
 }

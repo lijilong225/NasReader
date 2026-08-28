@@ -49,4 +49,40 @@ class TypographyConfig {
     }
     return buffer.toString();
   }
+
+  Map<String, dynamic> toJson() => {
+        'fontSize': fontSize,
+        'lineHeight': lineHeight,
+        'letterSpacing': letterSpacing,
+        'indentFirstLine': indentFirstLine,
+        'customFontFamily': customFontFamily,
+      };
+
+  factory TypographyConfig.fromJson(Map<String, dynamic> json) {
+    const fallback = TypographyConfig();
+    final family = json['customFontFamily'];
+    return TypographyConfig(
+      fontSize:
+          (json['fontSize'] as num?)?.toDouble().clamp(12.0, 40.0) ?? fallback.fontSize,
+      lineHeight:
+          (json['lineHeight'] as num?)?.toDouble().clamp(1.0, 3.0) ?? fallback.lineHeight,
+      letterSpacing: (json['letterSpacing'] as num?)?.toDouble().clamp(0.0, 10.0) ??
+          fallback.letterSpacing,
+      indentFirstLine: json['indentFirstLine'] as bool? ?? fallback.indentFirstLine,
+      customFontFamily: family is String && family.isNotEmpty ? family : null,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is TypographyConfig &&
+      other.fontSize == fontSize &&
+      other.lineHeight == lineHeight &&
+      other.letterSpacing == letterSpacing &&
+      other.indentFirstLine == indentFirstLine &&
+      other.customFontFamily == customFontFamily;
+
+  @override
+  int get hashCode => Object.hash(
+      fontSize, lineHeight, letterSpacing, indentFirstLine, customFontFamily);
 }

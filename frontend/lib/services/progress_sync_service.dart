@@ -81,6 +81,9 @@ class BookProgress {
 
 class ProgressSyncService {
   static const String _storageKey = 'local_reading_progress_map';
+
+  /// 已从书架移除但云端记录仍保留的书籍，避免远端同步把它们拉回书架
+  static const String _shelfRemovedKey = 'shelf_removed_book_ids';
   static String? _cachedDeviceId;
 
   /// 未显式传入时复用 NetworkClient 单例，确保 Token 与 401 拦截器生效
@@ -172,10 +175,12 @@ class ProgressSyncService {
         final prefs = await SharedPreferences.getInstance();
         final rawMap = prefs.getString(_storageKey);
         Map<String, dynamic> localMap = rawMap != null ? jsonDecode(rawMap) : {};
+        final shelfRemoved = (prefs.getStringList(_shelfRemovedKey) ?? []).toSet();
 
         for (var raw in remoteList) {
           final remoteItem = BookProgress.fromJson(Map<String, dynamic>.from(raw));
           if (remoteItem.bookId.isEmpty) continue;
+          if (shelfRemoved.contains(remoteItem.bookId)) continue;
 
           // 本地不存在或远端时间戳更新，则更新本地
           if (localMap.containsKey(remoteItem.bookId)) {
@@ -233,6 +238,7 @@ class ProgressSyncService {
 
     // 2. 清理本地 SharedPreferences 书签记录
     await prefs.remove('local_bookmarks_$bookId');
+    await _clearShelfRemovalFlag(prefs, bookId);
 
     // 3. 异步上报后端清除云端记录（不删除 NAS 原始文件）
     if (ApiConfig.isLoggedIn) {
@@ -251,7 +257,48 @@ class ProgressSyncService {
     }
   }
 
-  /// 6. 旧版本以“文件名”作为 bookId，新版本改用后端文件指纹。
+  /// 6. 从书架移除单本书籍：只清空本地进度与书签，云端记录保留，
+  /// 重新加入书架时可从云端拉回历史进度继续阅读。
+  static Future<void> removeFromShelfLocally(String bookId) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final rawMap = prefs.getString(_storageKey);
+    if (rawMap != null) {
+      final Map<String, dynamic> map = jsonDecode(rawMap);
+      map.remove(bookId);
+      await prefs.setString(_storageKey, jsonEncode(map));
+    }
+    await prefs.remove('local_bookmarks_$bookId');
+
+    final removed = prefs.getStringList(_shelfRemovedKey) ?? [];
+    if (!removed.contains(bookId)) {
+      removed.add(bookId);
+      await prefs.setStringList(_shelfRemovedKey, removed);
+    }
+    AppLogger.log('📤 已从书架移除并保留云端记录: $bookId');
+  }
+
+  /// 7. 书籍重新加入书架：解除屏蔽并从云端拉回此前的阅读进度
+  static Future<void> restoreToShelf(String bookId, [Dio? dio]) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!await _clearShelfRemovalFlag(prefs, bookId)) return;
+    if (!ApiConfig.isLoggedIn) return;
+    await syncWithRemote(dio);
+    AppLogger.log('📥 已恢复书架书籍的云端阅读进度: $bookId');
+  }
+
+  /// 返回是否确实存在待清除的屏蔽标记
+  static Future<bool> _clearShelfRemovalFlag(
+    SharedPreferences prefs,
+    String bookId,
+  ) async {
+    final removed = prefs.getStringList(_shelfRemovedKey) ?? [];
+    if (!removed.remove(bookId)) return false;
+    await prefs.setStringList(_shelfRemovedKey, removed);
+    return true;
+  }
+
+  /// 8. 旧版本以“文件名”作为 bookId，新版本改用后端文件指纹。
   /// 首次以指纹打开某本书时，把仅存在旧键的记录迁移到新键，避免进度丢失。
   static Future<void> migrateLegacyBookId({
     required String legacyBookId,

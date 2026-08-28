@@ -242,6 +242,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
             ListTile(
               leading: const Icon(Icons.delete_sweep_outlined, color: Colors.orange),
               title: const Text('移除书架'),
+              subtitle: const Text('保留云端进度，重新加入后可继续阅读', style: TextStyle(fontSize: 12)),
               onTap: () => Navigator.pop(ctx, 'remove'),
             ),
             ListTile(
@@ -361,16 +362,16 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
     }
   }
 
-  /// 长按删除书籍（本地缓存 + 阅读进度 + 书签 + 云端记录）
+  /// 从书架移除（只清本地缓存与本地进度/书签，云端记录保留）
   Future<void> _handleDeleteBook(BookshelfItem book) async {
     final bool? shouldDelete = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('从书架移除', style: TextStyle(fontWeight: FontWeight.bold)),
         content: Text(
-          '确定要从书架删除《${book.title}》吗？\n\n'
-          '• 本地缓存文件将被清理\n'
-          '• 相关阅读进度与书签将同步删除\n'
+          '确定要从书架移除《${book.title}》吗？\n\n'
+          '• 本地缓存文件与本地阅读进度、书签将被清理\n'
+          '• 云端阅读进度与书签保留，重新加入书架后可继续阅读\n'
           '• NAS 原始文件不受影响，可随时重新下载',
           style: const TextStyle(fontSize: 13, height: 1.5),
         ),
@@ -384,7 +385,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
               backgroundColor: Colors.redAccent.shade700,
             ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('确认删除'),
+            child: const Text('确认移除'),
           ),
         ],
       ),
@@ -398,8 +399,8 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
         await book.localFile!.delete();
       }
 
-      // 2. 级联清理本地存储并通知后端删除阅读记录与书签
-      await ProgressSyncService.deleteBookEverything(book.bookId, widget.dio);
+      // 2. 只清理本地记录，并屏蔽远端同步把它拉回书架
+      await ProgressSyncService.removeFromShelfLocally(book.bookId);
 
       // 3. 重新加载书架视图
       await loadLocalBooks();
@@ -414,10 +415,10 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
         );
       }
     } catch (e) {
-      AppLogger.log('❌ 删除书籍异常: $e');
+      AppLogger.log('❌ 移除书架异常: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('删除失败: $e'), backgroundColor: Colors.redAccent),
+          SnackBar(content: Text('移除失败: $e'), backgroundColor: Colors.redAccent),
         );
       }
     }

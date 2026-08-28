@@ -165,6 +165,9 @@ class FavoritesPageState extends State<FavoritesPage> {
     final file = await _ensureLocalFile(book);
     if (file == null || !mounted) return;
 
+    // 曾从书架移除过的书，重新打开时把云端进度拉回本地
+    await ProgressSyncService.restoreToShelf(book.bookId, _dio);
+
     final saved = await ProgressSyncService.getLocalProgress(book.bookId);
 
     // 尚未加入书架的书，写入一条初始进度记录使其出现在本地书架

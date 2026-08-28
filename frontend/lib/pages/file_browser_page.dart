@@ -440,6 +440,9 @@ class FileBrowserPageState extends State<FileBrowserPage> {
       );
     }
 
+    // 曾从书架移除过的书，重新打开时把云端进度拉回本地
+    await ProgressSyncService.restoreToShelf(bookId, _dio);
+
     final progressList = await ProgressSyncService.getAllLocalProgress();
     final savedRecord = progressList.firstWhere(
       (p) => p.bookId == bookId,

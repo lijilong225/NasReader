@@ -153,19 +153,27 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
     Navigator.pop(context);
     if (b.byteOffset == null || _pages.isEmpty) return;
 
-    for (int i = 0; i < _pages.length; i++) {
-      final isLast = (i == _pages.length - 1);
-      if (b.byteOffset! >= _pages[i].startByteOffset &&
-          (b.byteOffset! < _pages[i].endByteOffset || isLast)) {
-        setState(() {
-          _currentPageIndex = i;
-          _showControls = false;
-        });
-        _turnViewKey.currentState?.jumpToPage(i);
-        _saveCurrentProgress();
+    final target = _locatePageByByteOffset(_pages, b.byteOffset!);
+    setState(() {
+      _currentPageIndex = target;
+      _showControls = false;
+    });
+    _turnViewKey.currentState?.jumpToPage(target);
+    _saveCurrentProgress();
+  }
+
+  /// 取最后一个起始偏移不超过目标值的页，避免落回更早的页
+  static int _locatePageByByteOffset(List<FullTxtPageSlice> pages, int byteOffset) {
+    if (pages.isEmpty || byteOffset <= 0) return 0;
+    int target = 0;
+    for (int i = 0; i < pages.length; i++) {
+      if (pages[i].startByteOffset <= byteOffset) {
+        target = i;
+      } else {
         break;
       }
     }
+    return target;
   }
 
   Size _getContentSize() {
@@ -214,17 +222,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage> {
 
       if (!mounted) return;
 
-      int targetPage = 0;
-      if (offsetToLocate > 0 && result.pages.isNotEmpty) {
-        for (int i = 0; i < result.pages.length; i++) {
-          final isLast = (i == result.pages.length - 1);
-          if (offsetToLocate >= result.pages[i].startByteOffset &&
-              (offsetToLocate < result.pages[i].endByteOffset || isLast)) {
-            targetPage = i;
-            break;
-          }
-        }
-      }
+      final targetPage = _locatePageByByteOffset(result.pages, offsetToLocate);
 
       setState(() {
         _pages = result.pages;

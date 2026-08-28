@@ -121,6 +121,9 @@ class FullTxtEngine {
     for (int i = 0; i < lines.length; i++) {
       var rawLine = lines[i];
       final lineCharLengthWithBreak = rawLine.length + 1;
+      // 下一行行首在原文中的真实字节偏移（+1 为行尾换行符；末行无换行时收敛到文件长度）
+      final nextLineStartByte =
+          (currentByteOffset + utf8.encode(rawLine).length + 1).clamp(0, totalBytes);
 
       // 判断当前行是否命中新章节
       bool isNewChapter = false;
@@ -135,23 +138,20 @@ class FullTxtEngine {
       // 命中新章节：封存旧页，开启新页，完全跳过该行正文录入
       if (isNewChapter) {
         if (currentLinesOnPage > 0 || pageBuffer.isNotEmpty) {
-          final pageContent = pageBuffer.toString().trimRight();
-          final pageBytes = utf8.encode(pageContent).length;
-          final pageEndByte = currentByteOffset + pageBytes;
-
           pages.add(FullTxtPageSlice(
             pageIndex: pageIdx++,
             startByteOffset: pageStartByte,
-            endByteOffset: pageEndByte,
-            content: pageContent,
+            endByteOffset: currentByteOffset,
+            content: pageBuffer.toString().trimRight(),
             chapterTitle: currentPendingChapterTitle,
           ));
 
           pageBuffer.clear();
           currentLinesOnPage = 0;
-          pageStartByte = pageEndByte;
           currentPendingChapterTitle = null;
         }
+        // 新页从章节标题行行首开始
+        pageStartByte = currentByteOffset;
 
         chapters.add(FullTxtChapterItem(
           index: chapterCount++,
@@ -165,16 +165,17 @@ class FullTxtEngine {
 
         // 推进字节索引并彻底跳过该标题行，绝不进入 pageBuffer
         currentCharIndex += lineCharLengthWithBreak;
-        currentByteOffset += utf8.encode('$rawLine\n').length;
+        currentByteOffset = nextLineStartByte;
         continue;
       }
 
-      var line = rawLine.trimRight();
+      final trimmedLine = rawLine.trimRight();
+      var line = trimmedLine;
 
       // 如果当前是新章节起始页第一行且为空行，直接过滤跳过
       if (currentPendingChapterTitle != null && currentLinesOnPage == 1 && line.trim().isEmpty) {
         currentCharIndex += lineCharLengthWithBreak;
-        currentByteOffset += utf8.encode('$rawLine\n').length;
+        currentByteOffset = nextLineStartByte;
         continue;
       }
 
@@ -183,6 +184,9 @@ class FullTxtEngine {
           !line.startsWith('  ') && !line.startsWith('  ')) {
         line = '  $line';
       }
+
+      // 渲染期注入的缩进不占原文字节，换算真实偏移时需要扣除
+      final indentLength = line.length - trimmedLine.length;
 
       int lineOffset = 0;
       while (lineOffset < line.length || (lineOffset == 0 && line.isEmpty)) {
@@ -195,15 +199,22 @@ class FullTxtEngine {
         currentLinesOnPage++;
 
         if (currentLinesOnPage >= linesPerPage) {
-          final pageContent = pageBuffer.toString().trimRight();
-          final pageBytes = utf8.encode(pageContent).length;
-          final pageEndByte = currentByteOffset + pageBytes;
+          // 整行消费完则落到下一行行首，行内断开则按已消费的原文字符换算
+          final int pageEndByte;
+          if (endOffset >= line.length) {
+            pageEndByte = nextLineStartByte;
+          } else {
+            final consumedRawChars =
+                (endOffset - indentLength).clamp(0, trimmedLine.length);
+            pageEndByte = currentByteOffset +
+                utf8.encode(trimmedLine.substring(0, consumedRawChars)).length;
+          }
 
           pages.add(FullTxtPageSlice(
             pageIndex: pageIdx++,
             startByteOffset: pageStartByte,
             endByteOffset: pageEndByte,
-            content: pageContent,
+            content: pageBuffer.toString().trimRight(),
             chapterTitle: currentPendingChapterTitle,
           ));
 
@@ -218,7 +229,7 @@ class FullTxtEngine {
       }
 
       currentCharIndex += lineCharLengthWithBreak;
-      currentByteOffset += utf8.encode('$rawLine\n').length;
+      currentByteOffset = nextLineStartByte;
     }
 
     if (pageBuffer.isNotEmpty || currentPendingChapterTitle != null) {

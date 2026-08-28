@@ -15,6 +15,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'login_page.dart';
+import 'trash_bin_page.dart';
 import '../services/app_logger.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -388,6 +389,16 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
                     )
                   : const Icon(Icons.chevron_right),
               onTap: _isClearing ? null : _clearCache,
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('垃圾箱'),
+              subtitle: const Text('浏览已移动到 NAS 垃圾箱的书籍'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const TrashBinPage()),
+              ),
             ),
             // 诊断日志含请求地址与错误详情，release 包需连点标题 5 次解锁
             if (kDebugMode || _diagnosticsUnlocked)

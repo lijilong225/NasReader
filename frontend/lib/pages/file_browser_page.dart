@@ -514,6 +514,66 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     }  
   }
 
+  Future<void> _confirmMoveToTrash(NasFileItem item) async {
+    final title = p.basenameWithoutExtension(item.name);
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('移动到垃圾箱'),
+        content: Text(
+          '确定要把《$title》移动到 NAS 垃圾箱吗？\n\n'
+          '• 书架缓存、阅读进度、书签与收藏将一并清除\n'
+          '• 可在“设置 - 垃圾箱”中查看或恢复文件',
+          style: const TextStyle(fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('移动', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true || !mounted) return;
+
+    try {
+      await _dio.post('/api/v1/files/trash', data: {'path': item.path});
+      await _purgeBookTraces(item);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已把《$title》移动到垃圾箱')),
+      );
+      await _loadDirectory(_currentPath);
+    } catch (e) {
+      AppLogger.log('移动到垃圾箱失败: ${item.path} -> $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('移动失败，请检查网络或服务端权限'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  /// 书籍已进垃圾箱，书架缓存与它的进度、书签、收藏一并清掉（云端记录同步删除）
+  Future<void> _purgeBookTraces(NasFileItem item) async {
+    try {
+      final localFile = await _resolveLocalFile(item);
+      if (localFile.existsSync()) await localFile.delete();
+    } catch (e) {
+      AppLogger.log('清理本地缓存文件失败: ${item.name} -> $e');
+    }
+
+    await FavoriteService.remove(item.syncBookId);
+    await ProgressSyncService.deleteBookEverything(item.syncBookId, _dio);
+  }
+
   String _formatSize(int bytes) {
     if (bytes <= 0) return '';
     if (bytes < 1024) return '$bytes B';
@@ -702,6 +762,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
               color: isCached ? Colors.green : Colors.grey,
             ),
             onTap: () => _handleItemTap(item),
+            onLongPress: isBook ? () => _confirmMoveToTrash(item) : null,
           );
         },
       ),

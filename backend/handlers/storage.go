@@ -18,7 +18,7 @@ import (
 // FileNode 目录树节点结构
 type FileNode struct {
 	Name      string `json:"name"`
-	Path      string `json:"path"`                // 统一的相对路径，如 /科幻/三体.epub
+	Path      string `json:"path"` // 统一的相对路径，如 /科幻/三体.epub
 	IsDir     bool   `json:"is_dir"`
 	Size      int64  `json:"size"`
 	Extension string `json:"extension,omitempty"` // txt / epub
@@ -30,11 +30,25 @@ type FileNode struct {
 func BrowseDirectory(c *gin.Context) {
 	reqPath := c.DefaultQuery("path", "/")
 
+	// 垃圾箱是唯一允许浏览的隐藏目录，其余隐藏目录一律拒绝
+	if !utils.IsHiddenPathAllowed(reqPath) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "不允许浏览隐藏目录"})
+		return
+	}
+
 	// 1. 安全解析目标目录物理绝对路径
 	targetDir, err := utils.SafeResolvePath(reqPath)
 	if err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
+	}
+
+	// 浏览垃圾箱时按需创建，避免首次进入报 404
+	if utils.NormalizeRelPath(reqPath) == "/"+utils.TrashBinDirName {
+		if _, mkErr := utils.ResolveTrashBinDir(); mkErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "无法创建垃圾箱目录: " + mkErr.Error()})
+			return
+		}
 	}
 
 	entries, err := os.ReadDir(targetDir)
@@ -52,7 +66,7 @@ func BrowseDirectory(c *gin.Context) {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		// 忽略隐藏文件及文件夹（.DS_Store, .git 等）
+		// 忽略隐藏文件及文件夹（.DS_Store, .git, .trashBin 等）
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
@@ -113,6 +127,11 @@ func DownloadFile(c *gin.Context) {
 	relPath := c.Query("path")
 	if relPath == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 path 参数"})
+		return
+	}
+
+	if !utils.IsHiddenPathAllowed(relPath) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "不允许访问隐藏目录"})
 		return
 	}
 

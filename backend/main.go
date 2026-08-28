@@ -116,6 +116,9 @@ func main() {
 		{
 			fileGroup.GET("/browse", handlers.BrowseDirectory)
 			fileGroup.GET("/download", handlers.DownloadFile)
+			fileGroup.POST("/trash", handlers.MoveToTrash)
+			fileGroup.POST("/trash/restore", handlers.RestoreFromTrash)
+			fileGroup.POST("/trash/refresh", handlers.RefreshTrashBin)
 		}
 	}
 

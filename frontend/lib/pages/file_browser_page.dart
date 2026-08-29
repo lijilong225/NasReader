@@ -94,6 +94,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
   FileSortType _currentSort = FileSortType.timeDesc;
   final Set<String> _cachedFileNames = {};
   Set<String> _favoriteIds = {};
+  Set<String> _shelfBookIds = {};
 
   @override
   void initState() {
@@ -223,6 +224,15 @@ class FileBrowserPageState extends State<FileBrowserPage> {
       _cachedFileNames.contains(item.cacheFileName) ||
       _cachedFileNames.contains(item.name);
 
+  /// 书架与本地书架页保持一致：有本地阅读记录或已缓存即视为在书架
+  bool _isOnShelf(NasFileItem item) =>
+      _shelfBookIds.contains(item.syncBookId) || _isItemCached(item);
+
+  Future<void> _refreshShelfBookIds() async {
+    final list = await ProgressSyncService.getAllLocalProgress();
+    _shelfBookIds = list.map((e) => e.bookId).toSet();
+  }
+
   Future<void> _loadDirectory(String targetPath) async {
     setState(() {
       _isLoading = true;
@@ -232,6 +242,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     try {
       await _updateCachedFiles();
       _favoriteIds = await FavoriteService.getFavoriteIds();
+      await _refreshShelfBookIds();
 
       final res = await _dio.get(
         '/api/v1/files/browse',
@@ -577,6 +588,155 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     await ProgressSyncService.deleteBookEverything(item.syncBookId, _dio);
   }
 
+  /// 加入书架：不预先下载文件，先建立一条零进度记录，书架以“云端记录”展示
+  Future<void> _handleAddToShelf(NasFileItem item) async {
+    final title = p.basenameWithoutExtension(item.name);
+    try {
+      await ProgressSyncService.restoreToShelf(item.syncBookId, _dio);
+      if (!_shelfBookIds.contains(item.syncBookId)) {
+        await ProgressSyncService.updateProgress(
+          dio: _dio,
+          bookId: item.syncBookId,
+          title: title,
+          filePath: item.path,
+          progressPercent: 0.0,
+          locator: '0',
+        );
+      }
+      await _refreshShelfBookIds();
+      if (!mounted) return;
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已把《$title》加入书架'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      AppLogger.log('❌ 加入书架失败: ${item.path} -> $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('加入书架失败: $e'), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
+  /// 移出书架：清本地缓存与本地进度/书签，云端记录保留
+  Future<void> _handleRemoveFromShelf(NasFileItem item) async {
+    final title = p.basenameWithoutExtension(item.name);
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('移出书架', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Text(
+          '确定要把《$title》从书架移出吗？\n\n'
+          '• 本地缓存文件与本地阅读进度、书签将被清理\n'
+          '• 云端阅读进度与书签保留，重新加入书架后可继续阅读\n'
+          '• NAS 原始文件不受影响',
+          style: const TextStyle(fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('移出书架', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true || !mounted) return;
+
+    try {
+      final localFile = await _resolveLocalFile(item);
+      if (localFile.existsSync()) await localFile.delete();
+      await ProgressSyncService.removeFromShelfLocally(item.syncBookId);
+      await _updateCachedFiles();
+      await _refreshShelfBookIds();
+      if (!mounted) return;
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已把《$title》移出书架'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      AppLogger.log('❌ 移出书架失败: ${item.path} -> $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('移出书架失败: $e'), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
+  /// 行尾三点菜单：收藏、书架、扔到垃圾箱
+  Widget _buildBookActionMenu(NasFileItem item) {
+    final isFavorite = _favoriteIds.contains(item.syncBookId);
+    final onShelf = _isOnShelf(item);
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert, color: Colors.grey),
+      tooltip: '更多操作',
+      onSelected: (action) async {
+        switch (action) {
+          case 'favorite':
+            await _toggleFavorite(item);
+            break;
+          case 'shelf':
+            if (onShelf) {
+              await _handleRemoveFromShelf(item);
+            } else {
+              await _handleAddToShelf(item);
+            }
+            break;
+          case 'trash':
+            await _confirmMoveToTrash(item);
+            break;
+        }
+      },
+      itemBuilder: (ctx) => [
+        PopupMenuItem(
+          value: 'favorite',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(
+              isFavorite ? Icons.star_border : Icons.star,
+              color: Colors.amber.shade700,
+            ),
+            title: Text(isFavorite ? '移出收藏' : '加入收藏'),
+          ),
+        ),
+        PopupMenuItem(
+          value: 'shelf',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(
+              onShelf ? Icons.delete_sweep_outlined : Icons.library_add_outlined,
+              color: onShelf ? Colors.orange : Colors.blue,
+            ),
+            title: Text(onShelf ? '移出书架' : '加入书架'),
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'trash',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.delete_outline, color: Colors.redAccent),
+            title: Text('扔到垃圾箱'),
+          ),
+        ),
+      ],
+    );
+  }
+
   String _formatSize(int bytes) {
     if (bytes <= 0) return '';
     if (bytes < 1024) return '$bytes B';
@@ -718,7 +878,6 @@ class FileBrowserPageState extends State<FileBrowserPage> {
                     icon: iconData,
                     iconColor: iconColor,
                     isFavorite: _favoriteIds.contains(item.syncBookId),
-                    onToggleFavorite: () => _toggleFavorite(item),
                   )
                 : Icon(iconData, color: iconColor, size: 28),
             title: Row(
@@ -757,15 +916,20 @@ class FileBrowserPageState extends State<FileBrowserPage> {
                     _formatSize(item.size),
                     style: const TextStyle(fontSize: 12, color: Colors.grey),
                   ),
-            trailing: Icon(
-              item.isDir
-                  ? Icons.chevron_right
-                  : (isCached ? Icons.check_circle_outline : Icons.cloud_download_outlined),
-              size: 20,
-              color: isCached ? Colors.green : Colors.grey,
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  item.isDir
+                      ? Icons.chevron_right
+                      : (isCached ? Icons.check_circle_outline : Icons.cloud_download_outlined),
+                  size: 20,
+                  color: isCached ? Colors.green : Colors.grey,
+                ),
+                if (isBook) _buildBookActionMenu(item),
+              ],
             ),
             onTap: () => _handleItemTap(item),
-            onLongPress: isBook ? () => _confirmMoveToTrash(item) : null,
           );
         },
       ),

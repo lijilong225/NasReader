@@ -212,7 +212,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
     }
   }
 
-  /// 行尾三点菜单：移出书架、收藏、移入垃圾箱
+  /// 行尾三点菜单：收藏、移出书架、扔到垃圾箱
   Widget _buildBookActionMenu(BookshelfItem book) {
     final isFavorite = _favoriteIds.contains(book.bookId);
     return PopupMenuButton<String>(
@@ -220,11 +220,11 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
       tooltip: '更多操作',
       onSelected: (action) async {
         switch (action) {
-          case 'remove':
-            await _handleDeleteBook(book);
-            break;
           case 'favorite':
             await _confirmToggleFavorite(book, isFavorite);
+            break;
+          case 'remove':
+            await _handleDeleteBook(book);
             break;
           case 'trash':
             await _handleMoveToTrash(book);
@@ -232,15 +232,6 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
         }
       },
       itemBuilder: (ctx) => [
-        const PopupMenuItem(
-          value: 'remove',
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.delete_sweep_outlined, color: Colors.orange),
-            title: Text('移出书架'),
-          ),
-        ),
         PopupMenuItem(
           value: 'favorite',
           child: ListTile(
@@ -250,7 +241,16 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
               isFavorite ? Icons.star_border : Icons.star,
               color: Colors.amber.shade700,
             ),
-            title: Text(isFavorite ? '取消收藏' : '加入收藏'),
+            title: Text(isFavorite ? '移出收藏' : '加入收藏'),
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'remove',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.delete_sweep_outlined, color: Colors.orange),
+            title: Text('移出书架'),
           ),
         ),
         const PopupMenuItem(
@@ -270,7 +270,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(isFavorite ? '取消收藏' : '加入收藏'),
+        title: Text(isFavorite ? '移出收藏' : '加入收藏'),
         content: Text(
           isFavorite
               ? '确定要把《${book.title}》从收藏夹移除吗？'
@@ -284,7 +284,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text(isFavorite ? '取消收藏' : '收藏'),
+            child: Text(isFavorite ? '移出收藏' : '收藏'),
           ),
         ],
       ),
@@ -575,7 +575,6 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
             icon: isEpub ? Icons.menu_book : Icons.description,
             iconColor: isEpub ? Colors.green : Colors.blue,
             isFavorite: _favoriteIds.contains(book.bookId),
-            onToggleFavorite: () => _toggleFavorite(book),
           ),
           title: Text(
             book.title,

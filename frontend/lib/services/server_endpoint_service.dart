@@ -122,22 +122,47 @@ class ServerEndpointService {
     return null;
   }
 
-  /// 应用启动时调用：当前用的是备用服务器且主服务器已恢复时静默切回
+  /// 启动 / 从后台恢复时调用：校验当前生效地址，必要时在主备之间切换
   ///
-  /// 返回切回后的主服务器地址，无需切换时返回 null。
-  static Future<String?> restorePrimaryIfAvailable({Dio? client}) async {
+  /// 主服务器不可用则回落备用；备用运行期间主服务器恢复则静默切回。
+  /// 返回需要生效的新地址；无需切换或主备均不可用时返回 null。
+  static Future<ServerEndpointPick?> ensureActiveEndpoint({
+    String currentUrl = '',
+    Dio? client,
+  }) async {
     final endpoints = await load();
-    if (!endpoints.usingBackup || endpoints.primary.isEmpty) return null;
+    final current = normalizeUrl(currentUrl);
+    // 历史版本可能只存过 ApiConfig 的 baseUrl，没有写入主服务器配置
+    final primary = endpoints.primary.isNotEmpty ? endpoints.primary : current;
 
-    if (!await probe(endpoints.primary, client: client)) return null;
+    if (primary.isEmpty && !endpoints.hasBackup) return null;
+    // 没有备用地址且当前就是主地址时，探测结果无法带来任何切换
+    if (!endpoints.hasBackup && current == primary) return null;
+
+    final pick = await pickAvailable(
+      primary: primary,
+      backup: endpoints.backup,
+      client: client,
+    );
+    if (pick == null) {
+      AppLogger.log('⚠️ 主备服务器均不可达，保持当前地址 $current');
+      return null;
+    }
+    if (pick.url == current && pick.usingBackup == endpoints.usingBackup) {
+      return null;
+    }
 
     await save(
-      primary: endpoints.primary,
+      primary: primary,
       backup: endpoints.backup,
-      usingBackup: false,
+      usingBackup: pick.usingBackup,
     );
-    AppLogger.log('✅ 主服务器已恢复，静默切回 ${endpoints.primary}');
-    return endpoints.primary;
+    AppLogger.log(
+      pick.usingBackup
+          ? '🔀 已切换到备用服务器 ${pick.url}'
+          : '✅ 主服务器可用，切回 ${pick.url}',
+    );
+    return pick;
   }
 }
 

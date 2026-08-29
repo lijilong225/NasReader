@@ -5,6 +5,7 @@ import 'pages/favorites_page.dart';
 import 'pages/file_browser_page.dart';
 import 'pages/local_bookshelf_page.dart';
 import 'pages/settings_page.dart';
+import 'services/server_failover_service.dart';
 
 class MainNavigationContainer extends StatefulWidget {
   final Dio dio;
@@ -18,7 +19,8 @@ class MainNavigationContainer extends StatefulWidget {
   State<MainNavigationContainer> createState() => _MainNavigationContainerState();
 }
 
-class _MainNavigationContainerState extends State<MainNavigationContainer> {
+class _MainNavigationContainerState extends State<MainNavigationContainer>
+    with WidgetsBindingObserver {
   int _currentIndex = 0;
 
   // 挂载 Key 用于 Tab 切换时联动刷新
@@ -32,6 +34,7 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _pages = [
       LocalBookshelfPage(
         key: _bookshelfKey,
@@ -47,6 +50,36 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> {
         dio: widget.dio,
       ),
     ];
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    _checkServerAvailability();
+  }
+
+  /// 从后台恢复时主服务器可能已不可达，探测后自动落到可用地址
+  Future<void> _checkServerAvailability() async {
+    final pick = await ServerFailoverService.ensureAvailable();
+    if (pick == null || !mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          pick.usingBackup ? '主服务器不可用，已切换到备用服务器' : '主服务器已恢复，已切回主服务器',
+        ),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+
+    _bookshelfKey.currentState?.loadLocalBooks();
+    _favoritesKey.currentState?.loadFavorites();
   }
 
   void _onTabTapped(int index) {

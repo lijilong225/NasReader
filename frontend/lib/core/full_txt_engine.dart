@@ -4,15 +4,37 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:charset/charset.dart';
+import 'package:cp949_codec/cp949_codec.dart';
+import 'package:enough_convert/big5.dart';
 import 'package:flutter/foundation.dart';
 
 /// 缩进统一使用两个全角空格，与 TypographyConfig.applyIndent 保持一致
 const String kFullTxtIndent = '\u3000\u3000';
 
 const GbkCodec _looseGbk = GbkCodec(allowMalformed: true);
+const Big5Codec _looseBig5 = Big5Codec(allowInvalid: true);
+const ShiftJISCodec _looseShiftJis = ShiftJISCodec(allowMalformed: true);
+
+/// EucJPCodec 的 allowMalformed 判断是反的：传 true 会在遇到非法字节时抛异常，
+/// 传 false 才写入 U+FFFD。这里需要的是宽松解码，所以必须传 false。
+const EucJPCodec _looseEucJp = EucJPCodec(false);
+
+/// charset 包自带的 EUC-KR 码表有误（会解出完全错误的汉字），改用 CP949。
+/// CP949 是 EUC-KR 的超集，能兼容解码标准 EUC-KR 文本。
+const CP949Codec _looseEucKr = CP949Codec(allowInvalid: true);
+
 const Utf16Decoder _utf16Decoder = Utf16Decoder();
 
-enum FullTxtEncoding { utf8, gbk, utf16le, utf16be }
+enum FullTxtEncoding {
+  utf8,
+  gbk,
+  big5,
+  shiftJis,
+  eucJp,
+  eucKr,
+  utf16le,
+  utf16be,
+}
 
 enum FullTxtErrorKind { notFound, empty, permission, undecodable, unknown }
 
@@ -203,6 +225,28 @@ List<int> _wrapBoundaries(
   return boundaries;
 }
 
+/// 双字节编码的字节数估算：ASCII 占 1 字节，其余占 2 字节。
+/// Big5 / Shift-JIS 的 encoder 会把部分符号回写成 1 字节（例如 Big5 的 0xA145
+/// 解成 U+2022，再编码只剩 1 字节），直接用 encode().length 会让页字节偏移漂移，
+/// 所以这两种编码按码元分类计算。
+int _dbcsByteLength(String text) {
+  int total = 0;
+  for (int i = 0; i < text.length; i++) {
+    total += text.codeUnitAt(i) < 0x80 ? 1 : 2;
+  }
+  return total;
+}
+
+/// Shift-JIS 的半角片假名（U+FF61–U+FF9F）在源文件里只占 1 字节
+int _shiftJisByteLength(String text) {
+  int total = 0;
+  for (int i = 0; i < text.length; i++) {
+    final unit = text.codeUnitAt(i);
+    total += (unit < 0x80 || (unit >= 0xFF61 && unit <= 0xFF9F)) ? 1 : 2;
+  }
+  return total;
+}
+
 int _byteLengthOf(String text, FullTxtEncoding encoding) {
   if (text.isEmpty) return 0;
   switch (encoding) {
@@ -212,7 +256,24 @@ int _byteLengthOf(String text, FullTxtEncoding encoding) {
       try {
         return _looseGbk.encode(text).length;
       } catch (_) {
-        return utf8.encode(text).length;
+        return _dbcsByteLength(text);
+      }
+    case FullTxtEncoding.big5:
+      return _dbcsByteLength(text);
+    case FullTxtEncoding.shiftJis:
+      return _shiftJisByteLength(text);
+    case FullTxtEncoding.eucJp:
+      // EUC-JP 有 0x8F 开头的三字节序列，只有 encoder 能准确还原长度
+      try {
+        return _looseEucJp.encode(text).length;
+      } catch (_) {
+        return _dbcsByteLength(text);
+      }
+    case FullTxtEncoding.eucKr:
+      try {
+        return _looseEucKr.encode(text).length;
+      } catch (_) {
+        return _dbcsByteLength(text);
       }
     case FullTxtEncoding.utf16le:
     case FullTxtEncoding.utf16be:
@@ -224,6 +285,10 @@ int _newlineByteLength(FullTxtEncoding encoding) {
   switch (encoding) {
     case FullTxtEncoding.utf8:
     case FullTxtEncoding.gbk:
+    case FullTxtEncoding.big5:
+    case FullTxtEncoding.shiftJis:
+    case FullTxtEncoding.eucJp:
+    case FullTxtEncoding.eucKr:
       return 1;
     case FullTxtEncoding.utf16le:
     case FullTxtEncoding.utf16be:
@@ -238,6 +303,14 @@ String _decodeBytesAs(List<int> bytes, FullTxtEncoding encoding) {
       return const Utf8Decoder(allowMalformed: true).convert(bytes);
     case FullTxtEncoding.gbk:
       return _looseGbk.decode(bytes);
+    case FullTxtEncoding.big5:
+      return _looseBig5.decode(bytes);
+    case FullTxtEncoding.shiftJis:
+      return _looseShiftJis.decode(bytes);
+    case FullTxtEncoding.eucJp:
+      return _looseEucJp.decode(bytes);
+    case FullTxtEncoding.eucKr:
+      return _looseEucKr.decode(bytes);
     case FullTxtEncoding.utf16le:
       // 区间读取的起点已跳过 BOM，不能再当作 BOM 剥离
       return _utf16Decoder.decodeUtf16Le(bytes, 0, null, false);
@@ -296,17 +369,298 @@ _DecodedFile _detectAndDecode(Uint8List bytes) {
         'binary probe found ${zeroAtEven + zeroAtOdd} NUL bytes');
   }
 
-  final gbkText = _looseGbk.decode(bytes);
-  final sampled = math.min(gbkText.length, 2048);
+  return _rankLegacyEncodings(bytes);
+}
+
+/// 单字节编码候选的结构合法性统计
+class _StructStats {
+  const _StructStats(this.units, this.bad, this.multi);
+
+  /// 按该编码规则切出的字符个数
+  final int units;
+
+  /// 不符合该编码 lead/trail 规则的字节数
+  final int bad;
+
+  /// 多字节字符个数，为 0 说明该编码根本没派上用场
+  final int multi;
+
+  double get badRatio => units == 0 ? 1 : bad / units;
+}
+
+/// 每种候选编码用自己的 lead/trail 规则走一遍原始字节。
+/// 这一步只看字节结构，与解码结果无关，可以过滤掉大部分不可能的候选。
+_StructStats _structScan(Uint8List bytes, FullTxtEncoding encoding) {
+  final int length = bytes.length;
+  int i = 0;
+  int units = 0;
+  int bad = 0;
+  int multi = 0;
+
+  while (i < length) {
+    final int lead = bytes[i];
+    if (lead < 0x80) {
+      i++;
+      units++;
+      continue;
+    }
+    final int trail = i + 1 < length ? bytes[i + 1] : -1;
+    int step = 1;
+    bool valid = false;
+
+    switch (encoding) {
+      case FullTxtEncoding.gbk:
+        valid = lead >= 0x81 &&
+            lead <= 0xFE &&
+            trail >= 0x40 &&
+            trail <= 0xFE &&
+            trail != 0x7F;
+        if (valid) step = 2;
+        break;
+      case FullTxtEncoding.big5:
+        valid = lead >= 0x81 &&
+            lead <= 0xFE &&
+            ((trail >= 0x40 && trail <= 0x7E) ||
+                (trail >= 0xA1 && trail <= 0xFE));
+        if (valid) step = 2;
+        break;
+      case FullTxtEncoding.shiftJis:
+        if (lead >= 0xA1 && lead <= 0xDF) {
+          // 半角片假名，单字节
+          i++;
+          units++;
+          continue;
+        }
+        valid = ((lead >= 0x81 && lead <= 0x9F) ||
+                (lead >= 0xE0 && lead <= 0xFC)) &&
+            trail >= 0x40 &&
+            trail <= 0xFC &&
+            trail != 0x7F;
+        if (valid) step = 2;
+        break;
+      case FullTxtEncoding.eucJp:
+        if (lead == 0x8E && trail >= 0xA1 && trail <= 0xDF) {
+          valid = true;
+          step = 2;
+        } else if (lead == 0x8F &&
+            i + 2 < length &&
+            trail >= 0xA1 &&
+            trail <= 0xFE &&
+            bytes[i + 2] >= 0xA1 &&
+            bytes[i + 2] <= 0xFE) {
+          // JIS X 0212 三字节序列
+          valid = true;
+          step = 3;
+        } else if (lead >= 0xA1 &&
+            lead <= 0xFE &&
+            trail >= 0xA1 &&
+            trail <= 0xFE) {
+          valid = true;
+          step = 2;
+        }
+        break;
+      case FullTxtEncoding.eucKr:
+        valid = lead >= 0x81 &&
+            lead <= 0xFD &&
+            ((trail >= 0x41 && trail <= 0x5A) ||
+                (trail >= 0x61 && trail <= 0x7A) ||
+                (trail >= 0x81 && trail <= 0xFE));
+        if (valid) step = 2;
+        break;
+      case FullTxtEncoding.utf8:
+      case FullTxtEncoding.utf16le:
+      case FullTxtEncoding.utf16be:
+        valid = false;
+        break;
+    }
+
+    if (valid) {
+      multi++;
+    } else {
+      bad++;
+    }
+    units++;
+    i += step;
+  }
+  return _StructStats(units, bad, multi);
+}
+
+/// 解码结果的文字构成画像，用来判断解码出来的到底是人话还是乱码
+class _ScriptProfile {
+  const _ScriptProfile({
+    required this.sampled,
+    required this.cjk,
+    required this.kana,
+    required this.halfKana,
+    required this.hangul,
+    required this.jamo,
+    required this.punct,
+    required this.latin,
+  });
+
+  final int sampled;
+  final double cjk;
+  final double kana;
+  final double halfKana;
+  final double hangul;
+  final double jamo;
+  final double punct;
+  final double latin;
+}
+
+_ScriptProfile? _profileScript(String text) {
+  int total = 0;
+  int cjk = 0;
+  int kana = 0;
+  int halfKana = 0;
+  int hangul = 0;
+  int jamo = 0;
+  int punct = 0;
+  int latin = 0;
+
+  for (int i = 0; i < text.length; i++) {
+    final int unit = text.codeUnitAt(i);
+    if (unit < 0x80 || unit == 0xFFFD) continue;
+    total++;
+    if ((unit >= 0x4E00 && unit <= 0x9FFF) ||
+        (unit >= 0x3400 && unit <= 0x4DBF) ||
+        (unit >= 0xF900 && unit <= 0xFAFF)) {
+      cjk++;
+    } else if (unit >= 0x3040 && unit <= 0x30FF) {
+      kana++;
+    } else if (unit >= 0xFF61 && unit <= 0xFF9F) {
+      halfKana++;
+    } else if (unit >= 0xAC00 && unit <= 0xD7A3) {
+      hangul++;
+    } else if (unit >= 0x3130 && unit <= 0x318F) {
+      jamo++;
+    } else if ((unit >= 0x2010 && unit <= 0x203B) ||
+        (unit >= 0x3000 && unit <= 0x303F) ||
+        (unit >= 0xFF01 && unit <= 0xFF5E)) {
+      punct++;
+    } else if ((unit >= 0x00A0 && unit <= 0x024F) ||
+        (unit >= 0x0370 && unit <= 0x04FF)) {
+      latin++;
+    }
+  }
+
+  if (total == 0) return null;
+  double r(int n) => n / total;
+  return _ScriptProfile(
+    sampled: total,
+    cjk: r(cjk),
+    kana: r(kana),
+    halfKana: r(halfKana),
+    hangul: r(hangul),
+    jamo: r(jamo),
+    punct: r(punct),
+    latin: r(latin),
+  );
+}
+
+/// 传统多字节编码的候选列表。gbk 放在最前面，评分相同时优先保留现有行为。
+const List<FullTxtEncoding> _legacyCandidates = [
+  FullTxtEncoding.gbk,
+  FullTxtEncoding.big5,
+  FullTxtEncoding.shiftJis,
+  FullTxtEncoding.eucJp,
+  FullTxtEncoding.eucKr,
+];
+
+/// 打分阈值。低于此值说明所有候选解出来的都是乱码，判定为非文本文件。
+const double _minLegacyScore = 3.0;
+
+double? _scoreLegacyCandidate(
+  Uint8List bytes,
+  FullTxtEncoding encoding,
+  String text,
+) {
+  final stats = _structScan(bytes, encoding);
+  // 该编码完全没有用到多字节规则，说明它不可能是正确答案
+  if (stats.multi == 0) return null;
+
+  final profile = _profileScript(text);
+  if (profile == null) return null;
+
   int replacements = 0;
-  for (int i = 0; i < sampled; i++) {
-    if (gbkText.codeUnitAt(i) == 0xFFFD) replacements++;
+  for (int i = 0; i < text.length; i++) {
+    if (text.codeUnitAt(i) == 0xFFFD) replacements++;
   }
-  if (sampled > 0 && replacements > sampled ~/ 10) {
-    throw FullTxtEngineException(FullTxtErrorKind.undecodable,
-        'gbk decode produced $replacements replacement chars');
+  final double badRatio =
+      text.isEmpty ? 1 : replacements / text.length;
+
+  double score = 4.0 * (1.0 - badRatio) + 4.0 * (1.0 - stats.badRatio);
+
+  // 半角片假名和兼容谚文字母在真实读物里几乎不出现，占比高就是乱码的强信号
+  score -= 4.0 * profile.halfKana + 3.0 * profile.jamo;
+  score += 1.5 *
+      (profile.cjk +
+          profile.kana +
+          profile.hangul +
+          profile.punct +
+          profile.latin);
+
+  switch (encoding) {
+    case FullTxtEncoding.gbk:
+    case FullTxtEncoding.big5:
+      score += 2.0 * profile.cjk - 4.0 * (profile.kana + profile.hangul);
+      break;
+    case FullTxtEncoding.shiftJis:
+    case FullTxtEncoding.eucJp:
+      // 日文散文里假名与汉字必然共存，只有汉字说明大概率是中文被错解
+      score += profile.kana >= 0.10
+          ? 3.0 * math.min(profile.kana, 0.45) / 0.45
+          : -3.0;
+      score += profile.cjk >= 0.10 ? 1.0 : -2.0;
+      score -= 4.0 * profile.hangul;
+      break;
+    case FullTxtEncoding.eucKr:
+      score += profile.hangul >= 0.85 ? 3.0 : -3.0;
+      score -= 4.0 * profile.kana;
+      score -= 2.0 * profile.cjk;
+      break;
+    case FullTxtEncoding.utf8:
+    case FullTxtEncoding.utf16le:
+    case FullTxtEncoding.utf16be:
+      return null;
   }
-  return _DecodedFile(gbkText, FullTxtEncoding.gbk, 0);
+  return score;
+}
+
+/// 在 GBK / Big5 / Shift-JIS / EUC-JP / EUC-KR 之间挑一个最像人话的。
+/// 宽松解码几乎对任何 CJK 字节流都不报错，所以单靠替换字符数量无法区分，
+/// 必须同时看字节结构合法性和解码结果的文字构成。
+_DecodedFile _rankLegacyEncodings(Uint8List bytes) {
+  // 打分只取文件开头一段，避免大文件全量解码
+  final Uint8List sample = bytes.length > 65536
+      ? Uint8List.sublistView(bytes, 0, 65536)
+      : bytes;
+
+  FullTxtEncoding? best;
+  double bestScore = 0;
+  for (final encoding in _legacyCandidates) {
+    String text;
+    try {
+      text = _decodeBytesAs(sample, encoding);
+    } catch (_) {
+      continue;
+    }
+    final score = _scoreLegacyCandidate(sample, encoding, text);
+    if (score == null) continue;
+    if (best == null || score > bestScore) {
+      best = encoding;
+      bestScore = score;
+    }
+  }
+
+  if (best == null || bestScore < _minLegacyScore) {
+    throw FullTxtEngineException(
+      FullTxtErrorKind.undecodable,
+      'no legacy encoding matched (best=${best?.name ?? 'none'} '
+      'score=${bestScore.toStringAsFixed(2)})',
+    );
+  }
+  return _DecodedFile(_decodeBytesAs(bytes, best), best, 0);
 }
 
 class FullTxtEngine {

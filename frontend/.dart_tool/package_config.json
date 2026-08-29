@@ -74,6 +74,12 @@
       "languageVersion": "3.4"
     },
     {
+      "name": "cp949_codec",
+      "rootUri": "file:///Users/lijilong/.pub-cache/hosted/pub.dev/cp949_codec-1.0.2",
+      "packageUri": "lib/",
+      "languageVersion": "2.12"
+    },
+    {
       "name": "cross_file",
       "rootUri": "file:///Users/lijilong/.pub-cache/hosted/pub.dev/cross_file-0.3.5+4",
       "packageUri": "lib/",
@@ -102,6 +108,12 @@
       "rootUri": "file:///Users/lijilong/.pub-cache/hosted/pub.dev/dio_web_adapter-2.2.1",
       "packageUri": "lib/",
       "languageVersion": "3.3"
+    },
+    {
+      "name": "enough_convert",
+      "rootUri": "file:///Users/lijilong/.pub-cache/hosted/pub.dev/enough_convert-1.6.0",
+      "packageUri": "lib/",
+      "languageVersion": "2.12"
     },
     {
       "name": "fake_async",

@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:charset/charset.dart';
+import 'package:cp949_codec/cp949_codec.dart';
+import 'package:enough_convert/big5.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nas_reader/core/full_txt_engine.dart';
 
@@ -153,6 +155,61 @@ void main() {
     }
     for (final page in result.pages) {
       expect(locatePage(result.pages, page.startByteOffset), page.pageIndex);
+    }
+  });
+
+  test('传统多字节编码：识别正确且字节区间首尾相接', () async {
+    // 每种编码给一段符合该语言真实用字习惯的正文，检测算法依赖文字构成画像
+    final cases = <String, ({FullTxtEncoding encoding, List<int> Function(String) encode, String Function(int, int) line})>{
+      'big5': (
+        encoding: FullTxtEncoding.big5,
+        encode: (s) => const Big5Codec(allowInvalid: true).encode(s),
+        line: (c, p) => '　　窗外的雨停了，他推開門走出去，站在長安城的街道上。第$c章第$p段。',
+      ),
+      'shiftjis': (
+        encoding: FullTxtEncoding.shiftJis,
+        encode: (s) => const ShiftJISCodec(allowMalformed: true).encode(s),
+        line: (c, p) => '　　窓の外の雨が止んだので、彼は扉を開けて外に出ていった。第$c章第$p段。',
+      ),
+      'eucjp': (
+        encoding: FullTxtEncoding.eucJp,
+        encode: (s) => const EucJPCodec(false).encode(s),
+        line: (c, p) => '　　窓の外の雨が止んだので、彼は扉を開けて外に出ていった。第$c章第$p段。',
+      ),
+      'euckr': (
+        encoding: FullTxtEncoding.eucKr,
+        encode: (s) => const CP949Codec(allowInvalid: true).encode(s),
+        line: (c, p) => '　　창밖의 비가 그쳐서 그는 문을 열고 밖으로 나갔다. 제$c장 제$p단락.',
+      ),
+    };
+
+    for (final entry in cases.entries) {
+      final spec = entry.value;
+      final content = StringBuffer();
+      for (int c = 1; c <= 3; c++) {
+        for (int p = 0; p < 10; p++) {
+          content.writeln(spec.line(c, p));
+        }
+      }
+      final file = File('${tempDir.path}/${entry.key}.txt');
+      await file.writeAsBytes(spec.encode(content.toString()));
+
+      final result = await FullTxtEngine.paginate(
+          FullTxtPaginationParams(filePath: file.path, metrics: kTestMetrics));
+
+      expect(result.encoding, spec.encoding, reason: '${entry.key} 编码识别错误');
+      expect(result.pages.first.startByteOffset, 0);
+      expect(result.pages.last.endByteOffset, result.totalBytes,
+          reason: '${entry.key} 末页必须覆盖到文件结尾');
+      for (int i = 0; i + 1 < result.pages.length; i++) {
+        expect(
+            result.pages[i + 1].startByteOffset, result.pages[i].endByteOffset,
+            reason: '${entry.key} 第 $i 页与下一页必须首尾相接');
+      }
+      for (final page in result.pages) {
+        expect(locatePage(result.pages, page.startByteOffset), page.pageIndex,
+            reason: '${entry.key} 第 ${page.pageIndex} 页定位漂移');
+      }
     }
   });
 

@@ -5,12 +5,14 @@
   "packages": [
     {
       "name": "nas_reader",
-      "version": "0.6.9+73",
+      "version": "0.7.0+74",
       "dependencies": [
         "archive",
         "charset",
         "connectivity_plus",
+        "cp949_codec",
         "dio",
+        "enough_convert",
         "file_picker",
         "flutter",
         "flutter_secure_storage",
@@ -54,6 +56,16 @@
         "test_api",
         "vector_math"
       ]
+    },
+    {
+      "name": "cp949_codec",
+      "version": "1.0.2",
+      "dependencies": []
+    },
+    {
+      "name": "enough_convert",
+      "version": "1.6.0",
+      "dependencies": []
     },
     {
       "name": "charset",

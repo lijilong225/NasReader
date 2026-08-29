@@ -212,62 +212,58 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
     }
   }
 
-  /// 长按操作面板：收藏、移除书架、移入垃圾箱
-  Future<void> _showBookActions(BookshelfItem book) async {
+  /// 行尾三点菜单：移出书架、收藏、移入垃圾箱
+  Widget _buildBookActionMenu(BookshelfItem book) {
     final isFavorite = _favoriteIds.contains(book.bookId);
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text(
-                book.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            const Divider(height: 1),
-            ListTile(
-              leading: Icon(
-                isFavorite ? Icons.star_border : Icons.star,
-                color: Colors.amber.shade700,
-              ),
-              title: Text(isFavorite ? '取消收藏' : '加入收藏'),
-              onTap: () => Navigator.pop(ctx, 'favorite'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete_sweep_outlined, color: Colors.orange),
-              title: const Text('移除书架'),
-              subtitle: const Text('保留云端进度，重新加入后可继续阅读', style: TextStyle(fontSize: 12)),
-              onTap: () => Navigator.pop(ctx, 'remove'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
-              title: const Text('移入垃圾箱'),
-              subtitle: const Text('同时从 NAS 书库移除', style: TextStyle(fontSize: 12)),
-              onTap: () => Navigator.pop(ctx, 'trash'),
-            ),
-          ],
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert, color: Colors.grey),
+      tooltip: '更多操作',
+      onSelected: (action) async {
+        switch (action) {
+          case 'remove':
+            await _handleDeleteBook(book);
+            break;
+          case 'favorite':
+            await _confirmToggleFavorite(book, isFavorite);
+            break;
+          case 'trash':
+            await _handleMoveToTrash(book);
+            break;
+        }
+      },
+      itemBuilder: (ctx) => [
+        const PopupMenuItem(
+          value: 'remove',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.delete_sweep_outlined, color: Colors.orange),
+            title: Text('移出书架'),
+          ),
         ),
-      ),
+        PopupMenuItem(
+          value: 'favorite',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(
+              isFavorite ? Icons.star_border : Icons.star,
+              color: Colors.amber.shade700,
+            ),
+            title: Text(isFavorite ? '取消收藏' : '加入收藏'),
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'trash',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.delete_outline, color: Colors.redAccent),
+            title: Text('扔到垃圾箱'),
+          ),
+        ),
+      ],
     );
-
-    if (action == null || !mounted) return;
-    switch (action) {
-      case 'favorite':
-        await _confirmToggleFavorite(book, isFavorite);
-        break;
-      case 'remove':
-        await _handleDeleteBook(book);
-        break;
-      case 'trash':
-        await _handleMoveToTrash(book);
-        break;
-    }
   }
 
   Future<void> _confirmToggleFavorite(BookshelfItem book, bool isFavorite) async {
@@ -612,12 +608,17 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
                 ),
             ],
           ),
-          trailing: Icon(
-            book.isDownloaded ? Icons.chevron_right : Icons.cloud_download_outlined,
-            color: Colors.grey,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                book.isDownloaded ? Icons.chevron_right : Icons.cloud_download_outlined,
+                color: Colors.grey,
+              ),
+              _buildBookActionMenu(book),
+            ],
           ),
           onTap: () => _openOrDownloadBook(book),
-          onLongPress: () => _showBookActions(book), // 👈 长按弹出操作面板
         );
       },
     );

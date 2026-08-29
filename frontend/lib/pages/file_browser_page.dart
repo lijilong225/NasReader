@@ -873,6 +873,10 @@ class FileBrowserPageState extends State<FileBrowserPage> {
           }
 
           return ListTile(
+            // 48px 的三点按钮内部自带 12px 视觉留白，右侧内边距取 4px 即为 16px
+            contentPadding: isBook
+                ? const EdgeInsets.only(left: 16, right: 4)
+                : const EdgeInsets.symmetric(horizontal: 16),
             leading: isBook
                 ? BookLeadingIcon(
                     icon: iconData,
@@ -880,35 +884,11 @@ class FileBrowserPageState extends State<FileBrowserPage> {
                     isFavorite: _favoriteIds.contains(item.syncBookId),
                   )
                 : Icon(iconData, color: iconColor, size: 28),
-            title: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    item.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w500),
-                  ),
-                ),
-                if (isCached)
-                  Container(
-                    margin: const EdgeInsets.only(left: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.green.withValues(alpha: 0.15),
-                      border: Border.all(color: Colors.green, width: 0.8),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: const Text(
-                      '已缓存',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: Colors.green,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-              ],
+            title: Text(
+              item.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w500),
             ),
             subtitle: item.isDir
                 ? const Text('文件夹', style: TextStyle(fontSize: 12, color: Colors.grey))

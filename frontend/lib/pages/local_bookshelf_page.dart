@@ -571,6 +571,8 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
         final isEpub = book.extension == '.epub';
 
         return ListTile(
+          // 48px 的三点按钮内部自带 12px 视觉留白，右侧内边距取 4px 即为 16px
+          contentPadding: const EdgeInsets.only(left: 16, right: 4),
           leading: BookLeadingIcon(
             icon: isEpub ? Icons.menu_book : Icons.description,
             iconColor: isEpub ? Colors.green : Colors.blue,

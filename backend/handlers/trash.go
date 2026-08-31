@@ -62,8 +62,7 @@ func MoveToTrash(c *gin.Context) {
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(srcPath))
-	if ext != ".txt" && ext != ".epub" {
+	if !IsSupportedBookFile(srcPath) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "仅支持移动电子书文件"})
 		return
 	}
@@ -146,8 +145,7 @@ func RestoreFromTrash(c *gin.Context) {
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(srcPath))
-	if ext != ".txt" && ext != ".epub" {
+	if !IsSupportedBookFile(srcPath) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "仅支持恢复电子书文件"})
 		return
 	}

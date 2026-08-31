@@ -15,13 +15,30 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// supportedBookExts 支持的电子书格式白名单（不含点号），需与前端 BookFormat 保持一致
+var supportedBookExts = map[string]bool{
+	"txt":  true,
+	"epub": true,
+	"pdf":  true,
+}
+
+// IsSupportedBookExt 判断扩展名是否为受支持的电子书格式，入参可带或不带点号
+func IsSupportedBookExt(ext string) bool {
+	return supportedBookExts[strings.ToLower(strings.TrimPrefix(ext, "."))]
+}
+
+// IsSupportedBookFile 判断文件名/路径是否为受支持的电子书
+func IsSupportedBookFile(name string) bool {
+	return IsSupportedBookExt(filepath.Ext(name))
+}
+
 // FileNode 目录树节点结构
 type FileNode struct {
 	Name      string `json:"name"`
 	Path      string `json:"path"` // 统一的相对路径，如 /科幻/三体.epub
 	IsDir     bool   `json:"is_dir"`
 	Size      int64  `json:"size"`
-	Extension string `json:"extension,omitempty"` // txt / epub
+	Extension string `json:"extension,omitempty"` // txt / epub / pdf
 	BookID    string `json:"book_id,omitempty"`   // 文件的唯一指纹（用于跨设备精确同步）
 	ModTime   int64  `json:"mod_time"`
 }
@@ -100,7 +117,7 @@ func BrowseDirectory(c *gin.Context) {
 		} else {
 			ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))
 			// 只过滤展示支持的电子书格式
-			if ext == "txt" || ext == "epub" {
+			if IsSupportedBookExt(ext) {
 				bookID := GenerateFastFileFingerprint(fullEntryPath, info.Size())
 
 				nodes = append(nodes, FileNode{
@@ -159,8 +176,7 @@ func DownloadFile(c *gin.Context) {
 	}
 
 	// 3. 电子书格式白名单（防止读取目录下的隐藏敏感文件）
-	ext := strings.ToLower(filepath.Ext(targetFilePath))
-	if ext != ".txt" && ext != ".epub" {
+	if !IsSupportedBookFile(targetFilePath) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "不支持下载非电子书文件"})
 		return
 	}

@@ -152,6 +152,12 @@
       "languageVersion": "3.1"
     },
     {
+      "name": "flutter_pdfview",
+      "rootUri": "file:///Users/lijilong/.pub-cache/hosted/pub.dev/flutter_pdfview-1.4.5",
+      "packageUri": "lib/",
+      "languageVersion": "3.8"
+    },
+    {
       "name": "flutter_plugin_android_lifecycle",
       "rootUri": "file:///Users/lijilong/.pub-cache/hosted/pub.dev/flutter_plugin_android_lifecycle-2.0.35",
       "packageUri": "lib/",

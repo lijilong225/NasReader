@@ -40,6 +40,13 @@ class BookProgress {
     return locator.isNotEmpty ? locator : null;
   }
 
+  /// PDF 以页码（0 起）作为 locator
+  int get pdfPage {
+    if (locator.isEmpty) return 0;
+    final page = int.tryParse(locator) ?? 0;
+    return page < 0 ? 0 : page;
+  }
+
   Map<String, dynamic> toJson() => {
     'book_id': bookId,
     'title': title,

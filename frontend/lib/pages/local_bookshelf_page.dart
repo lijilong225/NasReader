@@ -5,11 +5,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/book_fingerprint.dart';
+import '../core/book_format.dart';
 import '../core/network_client.dart';
 import '../services/progress_sync_service.dart';
 import '../services/favorite_service.dart';
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
+import '../readers/pdf_reader_page.dart';
 import '../services/app_logger.dart';
 import '../widgets/book_leading_icon.dart';
 
@@ -23,6 +25,7 @@ class BookshelfItem {
   final double progressPercent;
   final String? epubCfi;
   final int? txtByteOffset;
+  final int pdfPage;
   final DateTime lastReadTime;
 
   /// 本地缓存文件体积，仅在已下载时有值
@@ -40,6 +43,7 @@ class BookshelfItem {
     required this.progressPercent,
     this.epubCfi,
     this.txtByteOffset,
+    this.pdfPage = 0,
     required this.lastReadTime,
     this.fileSizeBytes = 0,
   });
@@ -167,6 +171,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
           progressPercent: pItem.progress,
           epubCfi: pItem.epubCfi,
           txtByteOffset: pItem.txtByteOffset,
+          pdfPage: pItem.pdfPage,
           lastReadTime: DateTime.fromMillisecondsSinceEpoch(pItem.clientUpdatedAt),
           fileSizeBytes: _fileSizeOf(localFile),
         );
@@ -177,7 +182,7 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
         if (!mergedItems.containsKey(bookId)) {
           final fileName = BookCacheNaming.extractOriginalName(p.basename(file.path));
           final ext = p.extension(fileName).toLowerCase();
-          if (ext == '.txt' || ext == '.epub') {
+          if (BookFormat.fromExtension(ext) != null) {
             final stat = file.statSync();
             mergedItems[bookId] = BookshelfItem(
               bookId: bookId,
@@ -518,6 +523,33 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
           },
         ),
       ).then((_) => loadLocalBooks());
+    } else if (book.extension == '.pdf') {
+      Navigator.push(
+        context,
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 120),
+          pageBuilder: (context, animation, secondaryAnimation) => PdfReaderPage(
+            bookId: book.bookId,
+            file: targetFile,
+            title: book.title,
+            initialPage: book.pdfPage,
+            initialProgress: book.progressPercent,
+            onProgressChanged: (pageIndex, progress) {
+              ProgressSyncService.updateProgress(
+                dio: widget.dio,
+                bookId: book.bookId,
+                title: book.title,
+                filePath: book.remotePath,
+                progressPercent: progress,
+                locator: pageIndex.toString(),
+              );
+            },
+          ),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return FadeTransition(opacity: animation, child: child);
+          },
+        ),
+      ).then((_) => loadLocalBooks());
     }
   }
 
@@ -568,14 +600,14 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (context, index) {
         final book = _books[index];
-        final isEpub = book.extension == '.epub';
+        final format = BookFormat.fromExtension(book.extension);
 
         return ListTile(
           // 48px 的三点按钮内部自带 12px 视觉留白，右侧内边距取 4px 即为 16px
           contentPadding: const EdgeInsets.only(left: 16, right: 4),
           leading: BookLeadingIcon(
-            icon: isEpub ? Icons.menu_book : Icons.description,
-            iconColor: isEpub ? Colors.green : Colors.blue,
+            icon: format?.icon ?? Icons.insert_drive_file,
+            iconColor: format?.color ?? Colors.grey,
             isFavorite: _favoriteIds.contains(book.bookId),
           ),
           title: Text(

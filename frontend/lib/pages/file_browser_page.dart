@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:nas_reader/core/book_fingerprint.dart';
+import 'package:nas_reader/core/book_format.dart';
 import 'package:nas_reader/core/network_client.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -9,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../readers/stream_txt_reader_page.dart';
 import '../readers/epub_reader_page.dart';
+import '../readers/pdf_reader_page.dart';
 import '../services/progress_sync_service.dart';
 import '../services/favorite_service.dart';
 import '../services/app_logger.dart';
@@ -316,9 +318,9 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     }
 
     final ext = p.extension(item.name).toLowerCase();
-    if (ext != '.txt' && ext != '.epub') {
+    if (BookFormat.fromExtension(ext) == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('暂不支持此格式阅读，目前支持 TXT / EPUB')),
+        SnackBar(content: Text('暂不支持此格式阅读，目前支持 ${BookFormat.labels}')),
       );
       return;
     }
@@ -517,6 +519,33 @@ class FileBrowserPageState extends State<FileBrowserPage> {
                 filePath: item.path,
                 progressPercent: progress,
                 locator: cfi,
+              );
+            },
+          ),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return FadeTransition(opacity: animation, child: child);
+          },
+        ),
+      ).then((_) => _updateCachedFiles());
+    } else if (ext == '.pdf') {
+      Navigator.push(
+        context,
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 120),
+          pageBuilder: (context, animation, secondaryAnimation) => PdfReaderPage(
+            bookId: bookId,
+            file: file,
+            title: title,
+            initialPage: savedRecord.pdfPage,
+            initialProgress: savedRecord.progress,
+            onProgressChanged: (pageIndex, progress) {
+              ProgressSyncService.updateProgress(
+                dio: _dio,
+                bookId: bookId,
+                title: title,
+                filePath: item.path,
+                progressPercent: progress,
+                locator: pageIndex.toString(),
               );
             },
           ),
@@ -856,7 +885,8 @@ class FileBrowserPageState extends State<FileBrowserPage> {
           final item = _items[index];
           final ext = p.extension(item.name).toLowerCase();
           final isCached = !item.isDir && _isItemCached(item);
-          final isBook = !item.isDir && (ext == '.txt' || ext == '.epub');
+          final format = item.isDir ? null : BookFormat.fromExtension(ext);
+          final isBook = format != null;
 
           IconData iconData = Icons.insert_drive_file_outlined;
           Color iconColor = Colors.grey;
@@ -864,12 +894,9 @@ class FileBrowserPageState extends State<FileBrowserPage> {
           if (item.isDir) {
             iconData = Icons.folder;
             iconColor = Colors.amber.shade700;
-          } else if (ext == '.epub') {
-            iconData = Icons.menu_book;
-            iconColor = Colors.green;
-          } else if (ext == '.txt') {
-            iconData = Icons.description;
-            iconColor = Colors.blue;
+          } else if (format != null) {
+            iconData = format.icon;
+            iconColor = format.color;
           }
 
           return ListTile(

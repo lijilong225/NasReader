@@ -5,7 +5,7 @@
   "packages": [
     {
       "name": "nas_reader",
-      "version": "0.7.2+76",
+      "version": "0.7.3+77",
       "dependencies": [
         "archive",
         "charset",
@@ -15,6 +15,7 @@
         "enough_convert",
         "file_picker",
         "flutter",
+        "flutter_pdfview",
         "flutter_secure_storage",
         "open_file",
         "package_info_plus",
@@ -102,6 +103,13 @@
         "plugin_platform_interface",
         "web",
         "win32"
+      ]
+    },
+    {
+      "name": "flutter_pdfview",
+      "version": "1.4.5",
+      "dependencies": [
+        "flutter"
       ]
     },
     {

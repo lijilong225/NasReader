@@ -6,9 +6,11 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../core/book_fingerprint.dart';
+import '../core/book_format.dart';
 import '../core/network_client.dart';
 import '../models/favorite_book.dart';
 import '../readers/epub_reader_page.dart';
+import '../readers/pdf_reader_page.dart';
 import '../readers/stream_txt_reader_page.dart';
 import '../services/app_logger.dart';
 import '../services/favorite_service.dart';
@@ -155,9 +157,10 @@ class FavoritesPageState extends State<FavoritesPage> {
 
   Future<void> _openBook(FavoriteBook book) async {
     final ext = book.extension;
-    if (ext != '.txt' && ext != '.epub') {
+    final format = BookFormat.fromExtension(ext);
+    if (format == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('暂不支持此格式阅读，目前支持 TXT / EPUB')),
+        SnackBar(content: Text('暂不支持此格式阅读，目前支持 ${BookFormat.labels}')),
       );
       return;
     }
@@ -178,7 +181,7 @@ class FavoritesPageState extends State<FavoritesPage> {
         title: book.title,
         filePath: book.remotePath,
         progressPercent: 0.0,
-        locator: ext == '.txt' ? '0' : '',
+        locator: format == BookFormat.epub ? '' : '0',
       );
     }
 
@@ -195,23 +198,37 @@ class FavoritesPageState extends State<FavoritesPage> {
       );
     }
 
-    final Widget readerPage = ext == '.txt'
-        ? StreamTxtReaderPage(
-            bookId: book.bookId,
-            file: file,
-            title: book.title,
-            initialByteOffset: saved?.txtByteOffset ?? 0,
-            onProgressChanged: (byteOffset, progress) =>
-                reportProgress(byteOffset.toString(), progress),
-          )
-        : EpubReaderPage(
-            bookId: book.bookId,
-            file: file,
-            title: book.title,
-            initialCfi: saved?.epubCfi,
-            initialProgress: saved?.progress ?? 0.0,
-            onProgressChanged: reportProgress,
-          );
+    final Widget readerPage;
+    switch (format) {
+      case BookFormat.txt:
+        readerPage = StreamTxtReaderPage(
+          bookId: book.bookId,
+          file: file,
+          title: book.title,
+          initialByteOffset: saved?.txtByteOffset ?? 0,
+          onProgressChanged: (byteOffset, progress) =>
+              reportProgress(byteOffset.toString(), progress),
+        );
+      case BookFormat.epub:
+        readerPage = EpubReaderPage(
+          bookId: book.bookId,
+          file: file,
+          title: book.title,
+          initialCfi: saved?.epubCfi,
+          initialProgress: saved?.progress ?? 0.0,
+          onProgressChanged: reportProgress,
+        );
+      case BookFormat.pdf:
+        readerPage = PdfReaderPage(
+          bookId: book.bookId,
+          file: file,
+          title: book.title,
+          initialPage: saved?.pdfPage ?? 0,
+          initialProgress: saved?.progress ?? 0.0,
+          onProgressChanged: (pageIndex, progress) =>
+              reportProgress(pageIndex.toString(), progress),
+        );
+    }
 
     await Navigator.push(
       context,
@@ -265,12 +282,12 @@ class FavoritesPageState extends State<FavoritesPage> {
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (context, index) {
         final book = _favorites[index];
-        final isEpub = book.extension == '.epub';
+        final format = BookFormat.fromExtension(book.extension);
 
         return ListTile(
           leading: Icon(
-            isEpub ? Icons.menu_book : Icons.description,
-            color: isEpub ? Colors.green : Colors.blue,
+            format?.icon ?? Icons.insert_drive_file,
+            color: format?.color ?? Colors.grey,
             size: 28,
           ),
           title: Text(

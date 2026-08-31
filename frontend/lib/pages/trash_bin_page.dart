@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'package:nas_reader/core/network_client.dart';
 import 'package:path/path.dart' as p;
 
+import '../core/book_format.dart';
 import '../services/app_logger.dart';
 import 'file_browser_page.dart' show NasFileItem;
 
@@ -227,12 +228,13 @@ class TrashBinPageState extends State<TrashBinPage> {
         itemBuilder: (context, index) {
           final item = _items[index];
           final ext = p.extension(item.name).toLowerCase();
-          final isBook = !item.isDir && (ext == '.txt' || ext == '.epub');
+          final format = item.isDir ? null : BookFormat.fromExtension(ext);
+          final isBook = format != null;
           return ListTile(
             leading: Icon(
               item.isDir
                   ? Icons.folder_outlined
-                  : (ext == '.epub' ? Icons.menu_book_outlined : Icons.description_outlined),
+                  : (format?.outlinedIcon ?? Icons.insert_drive_file_outlined),
               color: item.isDir ? Colors.amber : Colors.grey,
               size: 28,
             ),

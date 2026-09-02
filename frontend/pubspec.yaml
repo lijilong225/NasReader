@@ -1,7 +1,7 @@
 name: nas_reader
 description: "A lightweight NAS e-book reader with multi-device sync."
 publish_to: 'none'
-version: 0.7.3+77
+version: 0.7.4+78
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -32,6 +32,9 @@ dependencies:
 
   # 字体导入与文件选择
   file_picker: ^10.0.0+1
+
+  # 跳转系统浏览器打开 GitHub Release 下载页
+  url_launcher: ^6.3.0
 
   # 读取构建时注入的 versionName/versionCode
   package_info_plus: ^8.0.0

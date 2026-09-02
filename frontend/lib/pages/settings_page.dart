@@ -13,10 +13,12 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'login_page.dart';
 import 'trash_bin_page.dart';
 import '../services/app_logger.dart';
+import '../services/update_service.dart';
 
 class SettingsPage extends StatefulWidget {
   final Dio? dio;
@@ -35,6 +37,7 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
   bool _isClearing = false;
   bool _isCalculating = false;
   String _versionStr = '';
+  bool _isCheckingUpdate = false;
 
   // release 包的隐藏入口：连点“存储与诊断”标题解锁日志面板
   static const _unlockTapCount = 5;
@@ -216,6 +219,117 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
       if (mounted) {
         setState(() => _isClearing = false);
       }
+    }
+  }
+
+  void _toast(String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+        backgroundColor: isError ? Colors.red : null,
+      ),
+    );
+  }
+
+  Future<void> _checkUpdate() async {
+    setState(() => _isCheckingUpdate = true);
+
+    try {
+      final result = await UpdateService.check();
+      if (!mounted) return;
+
+      if (!result.hasUpdate) {
+        _toast('当前已是最新版本 v${result.currentVersion}');
+        return;
+      }
+      _showUpdateDialog(result);
+    } catch (e) {
+      AppLogger.log('⚠️ 检查更新失败: $e');
+      if (!mounted) return;
+      _toast('检查更新失败，请稍后重试', isError: true);
+    } finally {
+      if (mounted) {
+        setState(() => _isCheckingUpdate = false);
+      }
+    }
+  }
+
+  void _showUpdateDialog(UpdateCheckResult result) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.system_update, color: Color(0xFF5A4A3A)),
+            SizedBox(width: 8),
+            Text('发现新版本'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '当前版本 v${result.currentVersion}，最新版本 v${result.latestVersion}。',
+              style: const TextStyle(fontSize: 13, height: 1.5),
+            ),
+            if (result.releaseNotes.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const Text('更新说明：', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 160),
+                child: SingleChildScrollView(
+                  child: Text(
+                    result.releaseNotes,
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700, height: 1.4),
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            const Divider(),
+            const Text(
+              '将跳转浏览器打开 GitHub Release 页面下载安装包。',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('稍后再说'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF382E25),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _openReleasePage(result.releaseUrl);
+            },
+            child: const Text('前往下载'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openReleasePage(String url) async {
+    try {
+      final opened = await launchUrl(
+        Uri.parse(url),
+        mode: LaunchMode.externalApplication,
+      );
+      if (opened || !mounted) return;
+      _toast('无法打开浏览器，请手动访问 ${UpdateService.releasePageUrl}', isError: true);
+    } catch (e) {
+      AppLogger.log('⚠️ 打开 Release 页面失败: $e');
+      if (!mounted) return;
+      _toast('无法打开浏览器，请手动访问 ${UpdateService.releasePageUrl}', isError: true);
     }
   }
 
@@ -422,6 +536,21 @@ class SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver 
               subtitle: const Text('App 概述与版本信息'),
               trailing: const Icon(Icons.chevron_right),
               onTap: _showAboutDialog,
+            ),
+            ListTile(
+              leading: const Icon(Icons.system_update_outlined),
+              title: const Text('检查更新'),
+              subtitle: Text(
+                _versionStr.isEmpty ? '获取 GitHub 最新发布版本' : '当前版本 $_versionStr',
+              ),
+              trailing: _isCheckingUpdate
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.chevron_right),
+              onTap: _isCheckingUpdate ? null : _checkUpdate,
             ),
           ],
         ),

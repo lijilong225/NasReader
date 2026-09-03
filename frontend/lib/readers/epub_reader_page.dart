@@ -8,10 +8,13 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../models/bookmark_model.dart';
 import '../services/bookmark_sync_service.dart';
+import '../widgets/eye_care_config.dart';
+import '../widgets/eye_care_controls.dart';
 import '../widgets/reader_drawer.dart';
 import '../widgets/typography_config.dart';
 import '../widgets/typography_settings_modal.dart';
 import '../services/app_logger.dart';
+import '../services/eye_care_prefs.dart';
 import '../services/typography_prefs.dart';
 
 enum HandMode {
@@ -78,6 +81,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
 
   HandMode _handMode = HandMode.standard;
   TypographyConfig _typoConfig = const TypographyConfig();
+  EyeCareConfig _eyeCare = const EyeCareConfig();
 
   // 手势拖拽与瞬切状态
   bool _isTurningPage = false;
@@ -94,8 +98,21 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadTypography();
     _loadHandMode();
+    _loadEyeCare();
     _loadBookmarks();
     _initWebView();
+  }
+
+  Future<void> _loadEyeCare() async {
+    final saved = await EyeCarePrefs.load();
+    if (!mounted || saved == _eyeCare) return;
+    setState(() => _eyeCare = saved);
+  }
+
+  void _updateEyeCare(EyeCareConfig config) {
+    if (config == _eyeCare) return;
+    setState(() => _eyeCare = config);
+    EyeCarePrefs.save(config);
   }
 
   Future<void> _loadTypography() async {
@@ -673,7 +690,10 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
             child: WebViewWidget(controller: _webViewController),
           ),
 
-          // 2. 顶层 3x3 九宫格与水平滑动手势拦截层
+          // 2. 护眼滤镜层（盖在 WebView 之上，不拦手势）
+          Positioned.fill(child: EyeCareOverlay(config: _eyeCare)),
+
+          // 3. 顶层 3x3 九宫格与水平滑动手势拦截层
           if (!_isLoading && _errorMessage == null)
             Positioned.fill(
               child: _buildNineGridGestureLayer(),
@@ -699,7 +719,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
               ),
             ),
 
-          // 3. 顶部控制条
+          // 4. 顶部控制条
           if (_showControls)
             Positioned(
               top: 0,
@@ -738,7 +758,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
               ),
             ),
 
-          // 4. 底部控制条（已移除翻页效果选项）
+          // 5. 底部控制条（已移除翻页效果选项）
           if (_showControls)
             Positioned(
               bottom: 0,
@@ -824,6 +844,13 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                             ],
                           ),
                         ],
+                      ),
+                      const SizedBox(height: 4),
+
+                      // 护眼模式与强度
+                      EyeCareControlRow(
+                        config: _eyeCare,
+                        onChanged: _updateEyeCare,
                       ),
                     ],
                   ),

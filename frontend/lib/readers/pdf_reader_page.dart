@@ -9,6 +9,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/bookmark_model.dart';
 import '../services/app_logger.dart';
 import '../services/bookmark_sync_service.dart';
+import '../services/eye_care_prefs.dart';
+import '../widgets/eye_care_config.dart';
+import '../widgets/eye_care_controls.dart';
 import '../widgets/reader_drawer.dart';
 
 /// PDF 阅读器。PDF 为固定版式，不做重排，因此不接入排版设置，
@@ -52,6 +55,7 @@ class _PdfReaderPageState extends State<PdfReaderPage> {
 
   bool _nightMode = false;
   bool _swipeHorizontal = true;
+  EyeCareConfig _eyeCare = const EyeCareConfig();
 
   /// 首帧渲染完成前不能跳页，记录待恢复的目标页
   bool _initialPageApplied = false;
@@ -69,7 +73,20 @@ class _PdfReaderPageState extends State<PdfReaderPage> {
     _currentPage = widget.initialPage < 0 ? 0 : widget.initialPage;
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadViewPrefs();
+    _loadEyeCare();
     _loadBookmarks();
+  }
+
+  Future<void> _loadEyeCare() async {
+    final saved = await EyeCarePrefs.load();
+    if (!mounted || saved == _eyeCare) return;
+    setState(() => _eyeCare = saved);
+  }
+
+  void _updateEyeCare(EyeCareConfig config) {
+    if (config == _eyeCare) return;
+    setState(() => _eyeCare = config);
+    EyeCarePrefs.save(config);
   }
 
   @override
@@ -229,6 +246,9 @@ class _PdfReaderPageState extends State<PdfReaderPage> {
                 AppLogger.log('⚠️ PDF 第 $page 页渲染失败: $error');
               },
             ),
+
+          // 护眼滤镜层，不拦缩放与拖动手势
+          Positioned.fill(child: EyeCareOverlay(config: _eyeCare)),
 
           // PDF 需保留缩放与拖动手势，仅在屏幕中心留一块热区用于呼出控制条
           if (!_isLoading && _errorMessage == null && !_showControls)
@@ -391,6 +411,8 @@ class _PdfReaderPageState extends State<PdfReaderPage> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 4),
+                EyeCareControlRow(config: _eyeCare, onChanged: _updateEyeCare),
               ],
             ),
           ),

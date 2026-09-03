@@ -9,9 +9,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/full_txt_engine.dart';
 import '../core/reader_theme.dart';
 import '../core/page_turn_view.dart';
+import '../widgets/eye_care_config.dart';
+import '../widgets/eye_care_controls.dart';
 import '../widgets/typography_config.dart';
 import '../widgets/typography_settings_modal.dart';
 import '../services/app_logger.dart';
+import '../services/eye_care_prefs.dart';
 import '../services/typography_prefs.dart';
 import '../models/bookmark_model.dart';
 
@@ -62,6 +65,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage>
   ReaderThemeData _currentTheme = ReaderThemes.parchment;
   HandMode _handMode = HandMode.standard;
   TypographyConfig _typoConfig = const TypographyConfig();
+  EyeCareConfig _eyeCare = const EyeCareConfig();
 
   FullTxtContentLoader? _contentLoader;
   FullTxtLayoutMetrics? _lastMetrics;
@@ -83,8 +87,21 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage>
     WidgetsBinding.instance.addObserver(this);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadHandMode();
+    _loadEyeCare();
     _loadBookmarks();
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
+  }
+
+  Future<void> _loadEyeCare() async {
+    final saved = await EyeCarePrefs.load();
+    if (!mounted || saved == _eyeCare) return;
+    setState(() => _eyeCare = saved);
+  }
+
+  void _updateEyeCare(EyeCareConfig config) {
+    if (config == _eyeCare) return;
+    setState(() => _eyeCare = config);
+    EyeCarePrefs.save(config);
   }
 
   Future<void> _bootstrap() async {
@@ -593,12 +610,15 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage>
               },
             ),
 
-            // 2. 顶层 3x3 九宫格与滑动拦截层
+            // 2. 护眼滤镜层（盖住正文，但不影响手势与控制条）
+            Positioned.fill(child: EyeCareOverlay(config: _eyeCare)),
+
+            // 3. 顶层 3x3 九宫格与滑动拦截层
             Positioned.fill(
               child: _buildNineGridGestureLayer(),
             ),
 
-            // 3. 顶部导航栏
+            // 4. 顶部导航栏
             if (_showControls)
               Positioned(
                 top: 0,
@@ -640,7 +660,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage>
                 ),
               ),
 
-            // 4. 底部控制栏
+            // 5. 底部控制栏
             if (_showControls)
               Positioned(
                 bottom: 0,
@@ -761,6 +781,13 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage>
                               }).toList(),
                             ),
                           ],
+                        ),
+                        const SizedBox(height: 4),
+
+                        // 护眼模式与强度
+                        EyeCareControlRow(
+                          config: _eyeCare,
+                          onChanged: _updateEyeCare,
                         ),
                       ],
                     ),

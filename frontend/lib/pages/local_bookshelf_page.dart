@@ -644,10 +644,8 @@ class LocalBookshelfPageState extends State<LocalBookshelfPage> with WidgetsBind
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                book.isDownloaded ? Icons.chevron_right : Icons.cloud_download_outlined,
-                color: Colors.grey,
-              ),
+              if (!book.isDownloaded)
+                const Icon(Icons.cloud_download_outlined, color: Colors.grey),
               _buildBookActionMenu(book),
             ],
           ),

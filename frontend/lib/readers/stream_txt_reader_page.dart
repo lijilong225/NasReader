@@ -748,37 +748,50 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage>
                               label: const Text('排版 / 字体', style: TextStyle(color: Colors.white, fontSize: 12)),
                               onPressed: _openTypographySettings,
                             ),
-                            Row(
-                              children: ReaderThemes.all.map((theme) {
-                                final isSelected = _currentTheme.bgColor == theme.bgColor;
-                                return Padding(
-                                  padding: const EdgeInsets.only(left: 6),
-                                  child: GestureDetector(
-                                    onTap: () => setState(() => _currentTheme = theme),
-                                    child: Container(
-                                      width: 48,
-                                      height: 28,
-                                      decoration: BoxDecoration(
-                                        color: theme.bgColor,
-                                        borderRadius: BorderRadius.circular(4),
-                                        border: Border.all(
-                                          color: isSelected ? Colors.blueAccent : Colors.grey,
-                                          width: isSelected ? 2 : 1,
+                            // 主题数量增加后单行放不下，允许横向滚动而非硬挤压
+                            Flexible(
+                              child: SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: Row(
+                                  children: ReaderThemes.all.map((theme) {
+                                    // 羊皮纸1/2 底色相同，只能按名称区分选中项
+                                    final isSelected = _currentTheme.name == theme.name;
+                                    return Padding(
+                                      padding: const EdgeInsets.only(left: 6),
+                                      child: GestureDetector(
+                                        onTap: () => setState(() => _currentTheme = theme),
+                                        child: Container(
+                                          width: 48,
+                                          height: 28,
+                                          decoration: BoxDecoration(
+                                            color: theme.bgColor,
+                                            image: theme.backgroundImage == null
+                                                ? null
+                                                : DecorationImage(
+                                                    image: AssetImage(theme.backgroundImage!),
+                                                    fit: BoxFit.cover,
+                                                  ),
+                                            borderRadius: BorderRadius.circular(4),
+                                            border: Border.all(
+                                              color: isSelected ? Colors.blueAccent : Colors.grey,
+                                              width: isSelected ? 2 : 1,
+                                            ),
+                                          ),
+                                          alignment: Alignment.center,
+                                          child: Text(
+                                            theme.name,
+                                            style: TextStyle(
+                                              color: theme.textColor,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
                                         ),
                                       ),
-                                      alignment: Alignment.center,
-                                      child: Text(
-                                        theme.name,
-                                        style: TextStyle(
-                                          color: theme.textColor,
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              }).toList(),
+                                    );
+                                  }).toList(),
+                                ),
+                              ),
                             ),
                           ],
                         ),
@@ -809,7 +822,16 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage>
     final cleanContent = _contentOf(slice);
 
     return Container(
-      color: _currentTheme.bgColor,
+      decoration: BoxDecoration(
+        color: _currentTheme.bgColor,
+        image: _currentTheme.backgroundImage == null
+            ? null
+            : DecorationImage(
+                image: AssetImage(_currentTheme.backgroundImage!),
+                // cover 会按短边等比放大并居中裁切，竖屏下正好只保留图片中间部分
+                fit: BoxFit.cover,
+              ),
+      ),
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(

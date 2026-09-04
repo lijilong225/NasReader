@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
+import '../core/reader_theme.dart';
 import '../models/bookmark_model.dart';
 import '../services/bookmark_sync_service.dart';
 import '../widgets/eye_care_config.dart';
@@ -215,6 +216,10 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
       final jsZipSource = await rootBundle.loadString('assets/js/jszip.min.js');
       final epubJsSource = await rootBundle.loadString('assets/js/epub.min.js');
 
+      // 纸纹图一次性内联成 data URI，避免切主题时通过 runJavaScript 传输大体积字符串
+      final bgImageData = await rootBundle.load(ReaderThemes.parchment2.backgroundImage!);
+      final bgImageBase64 = base64Encode(bgImageData.buffer.asUint8List());
+
       _webViewController = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(const Color(0xFFF6EFE2))
@@ -239,7 +244,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
         AndroidWebViewController.enableDebugging(true);
       }
 
-      final html = _buildEpubViewerHtml(base64Epub, widget.initialCfi, jsZipSource, epubJsSource);
+      final html = _buildEpubViewerHtml(base64Epub, widget.initialCfi, jsZipSource, epubJsSource, bgImageBase64);
       await _webViewController.loadHtmlString(html, baseUrl: 'https://localhost/');
     } catch (e) {
       setState(() {
@@ -303,6 +308,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     String? startCfi,
     String jsZipSource,
     String epubJsSource,
+    String bgImageBase64,
   ) {
     final initialLocation = (startCfi != null && startCfi.isNotEmpty)
         ? jsonEncode(startCfi)
@@ -361,6 +367,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     }
 
     const wrapper = document.getElementById("wrapper");
+    const PARCHMENT_BG = "data:image/jpeg;base64,$bgImageBase64";
 
     try {
       const base64Data = ${jsonEncode(base64Epub)};
@@ -483,7 +490,23 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
         });
       };
 
-      window.setTheme = (bgColor, textColor) => {
+      window.setTheme = (bgColor, textColor, useBgImage) => {
+        if (useBgImage) {
+          // 纹理链在不参与平移的 body 上，wrapper 与 iframe 正文置为透明，避免翻页时背景跟着滑动
+          document.body.style.backgroundColor = bgColor;
+          document.body.style.backgroundImage = 'url("' + PARCHMENT_BG + '")';
+          document.body.style.backgroundSize = 'cover';
+          document.body.style.backgroundPosition = 'center center';
+          document.body.style.backgroundRepeat = 'no-repeat';
+          wrapper.style.background = 'transparent';
+          rendition.themes.default({
+            'html, body': { 'background': 'transparent !important', 'color': textColor + ' !important' },
+            'p': { 'color': textColor + ' !important' }
+          });
+          return;
+        }
+
+        document.body.style.backgroundImage = 'none';
         document.body.style.background = bgColor;
         wrapper.style.background = bgColor;
         rendition.themes.default({
@@ -564,10 +587,11 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     _webViewController.runJavaScript('window.goToHref(${jsonEncode(href.trim())});');
   }
 
-  void _applyTheme(Color bg, Color text) {
-    final bgHex = '#${bg.toARGB32().toRadixString(16).substring(2)}';
-    final textHex = '#${text.toARGB32().toRadixString(16).substring(2)}';
-    _webViewController.runJavaScript('window.setTheme("$bgHex", "$textHex");');
+  void _applyTheme(ReaderThemeData theme) {
+    final bgHex = '#${theme.bgColor.toARGB32().toRadixString(16).substring(2)}';
+    final textHex = '#${theme.textColor.toARGB32().toRadixString(16).substring(2)}';
+    final useBgImage = theme.backgroundImage != null;
+    _webViewController.runJavaScript('window.setTheme("$bgHex", "$textHex", $useBgImage);');
   }
 
   void _applyTypographyToEpub(TypographyConfig config) {
@@ -835,13 +859,14 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                             label: const Text('排版 / 字体', style: TextStyle(color: Colors.white, fontSize: 12)),
                             onPressed: _openTypographySettings,
                           ),
-                          Row(
-                            children: [
-                              _buildThemeBtn('羊皮纸', const Color(0xFFF6EFE2), const Color(0xFF382E25)),
-                              _buildThemeBtn('护眼', const Color(0xFFDDEBD6), const Color(0xFF233621)),
-                              _buildThemeBtn('暗黑', const Color(0xFF1E1E1E), const Color(0xFF9E9E9E)),
-                              _buildThemeBtn('纯白', const Color(0xFFFFFFFF), const Color(0xFF1A1A1A)),
-                            ],
+                          // 主题数量增加后单行放不下，允许横向滚动而非硬挤压
+                          Flexible(
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                children: ReaderThemes.all.map(_buildThemeBtn).toList(),
+                              ),
+                            ),
                           ),
                         ],
                       ),
@@ -896,21 +921,27 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     );
   }
 
-  Widget _buildThemeBtn(String label, Color bg, Color text) {
+  Widget _buildThemeBtn(ReaderThemeData theme) {
     return Padding(
       padding: const EdgeInsets.only(left: 6),
       child: GestureDetector(
-        onTap: () => _applyTheme(bg, text),
+        onTap: () => _applyTheme(theme),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
-            color: bg,
+            color: theme.bgColor,
+            image: theme.backgroundImage == null
+                ? null
+                : DecorationImage(
+                    image: AssetImage(theme.backgroundImage!),
+                    fit: BoxFit.cover,
+                  ),
             borderRadius: BorderRadius.circular(4),
             border: Border.all(color: Colors.grey),
           ),
           child: Text(
-            label,
-            style: TextStyle(color: text, fontSize: 10, fontWeight: FontWeight.bold),
+            theme.name,
+            style: TextStyle(color: theme.textColor, fontSize: 10, fontWeight: FontWeight.bold),
           ),
         ),
       ),

@@ -54,3 +54,5 @@ flutter:
     # EPUB 渲染依赖的 JS 库本地化，避免运行时从 CDN 加载（离线可用 + 防供应链篡改）
     - assets/js/jszip.min.js
     - assets/js/epub.min.js
+    # 羊皮纸2 主题的纸纹背景图
+    - assets/readbg_01.jpg

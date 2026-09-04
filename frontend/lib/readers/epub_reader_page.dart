@@ -16,6 +16,7 @@ import '../widgets/typography_config.dart';
 import '../widgets/typography_settings_modal.dart';
 import '../services/app_logger.dart';
 import '../services/eye_care_prefs.dart';
+import '../services/reader_theme_prefs.dart';
 import '../services/typography_prefs.dart';
 
 enum HandMode {
@@ -83,6 +84,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   HandMode _handMode = HandMode.standard;
   TypographyConfig _typoConfig = const TypographyConfig();
   EyeCareConfig _eyeCare = const EyeCareConfig();
+  ReaderThemeData _currentTheme = ReaderThemes.parchment;
 
   // 手势拖拽与瞬切状态
   bool _isTurningPage = false;
@@ -222,7 +224,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
 
       _webViewController = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setBackgroundColor(const Color(0xFFF6EFE2))
+        ..setBackgroundColor(_currentTheme.bgColor)
         ..addJavaScriptChannel(
           'FlutterChannel',
           onMessageReceived: (JavaScriptMessage message) {
@@ -236,12 +238,22 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
             },
             onPageFinished: (_) {
               _applyTypographyToEpub(_typoConfig);
+              // 内嵌页每次重新加载都会回到 HTML 里写死的初始配色，必须重放已记忆的背景
+              _applyTheme(_currentTheme);
             },
           ),
         );
 
       if (_webViewController.platform is AndroidWebViewController) {
         AndroidWebViewController.enableDebugging(true);
+      }
+
+      // 背景主题先读回再拼 HTML，让内嵌页初始底色与记忆一致，避免暗黑/纯白首屏闪出羊皮纸
+      final savedTheme = await ReaderThemePrefs.load();
+      if (!mounted) return;
+      if (savedTheme.name != _currentTheme.name) {
+        setState(() => _currentTheme = savedTheme);
+        _webViewController.setBackgroundColor(savedTheme.bgColor);
       }
 
       final html = _buildEpubViewerHtml(base64Epub, widget.initialCfi, jsZipSource, epubJsSource, bgImageBase64);
@@ -313,6 +325,8 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     final initialLocation = (startCfi != null && startCfi.isNotEmpty)
         ? jsonEncode(startCfi)
         : 'undefined';
+    // 内嵌页的初始底色跟随已恢复的主题，不能写死成羊皮纸
+    final initialBg = '#${_currentTheme.bgColor.toARGB32().toRadixString(16).substring(2)}';
 
     return '''
 <!DOCTYPE html>
@@ -331,7 +345,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
       user-select: none;
       -webkit-user-select: none;
     }
-    html, body { width: 100vw; height: 100vh; overflow: hidden; background: #F6EFE2; }
+    html, body { width: 100vw; height: 100vh; overflow: hidden; background: $initialBg; }
     #wrapper {
       width: 100vw;
       height: 100vh;
@@ -339,7 +353,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
       top: 0;
       left: 0;
       will-change: transform;
-      background: #F6EFE2;
+      background: $initialBg;
     }
     #viewer { width: 100%; height: 100%; }
   </style>
@@ -587,6 +601,15 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
     _webViewController.runJavaScript('window.goToHref(${jsonEncode(href.trim())});');
   }
 
+  void _updateReaderTheme(ReaderThemeData theme) {
+    if (theme.name != _currentTheme.name) {
+      setState(() => _currentTheme = theme);
+      ReaderThemePrefs.save(theme);
+      _webViewController.setBackgroundColor(theme.bgColor);
+    }
+    _applyTheme(theme);
+  }
+
   void _applyTheme(ReaderThemeData theme) {
     final bgHex = '#${theme.bgColor.toARGB32().toRadixString(16).substring(2)}';
     final textHex = '#${theme.textColor.toARGB32().toRadixString(16).substring(2)}';
@@ -690,7 +713,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       key: _scaffoldKey,
-      backgroundColor: const Color(0xFFF6EFE2),
+      backgroundColor: _currentTheme.bgColor,
       drawer: ReaderDrawer(
         title: widget.title,
         bookmarks: _bookmarks,
@@ -710,7 +733,7 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
         children: [
           // 1. 底层 WebView 视图（无 Flutter 外层位移，全交由 DOM 内部硬件加速平移）
           Container(
-            color: const Color(0xFFF6EFE2),
+            color: _currentTheme.bgColor,
             child: WebViewWidget(controller: _webViewController),
           ),
 
@@ -724,8 +747,8 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
             ),
 
           if (_isLoading)
-            const Center(
-              child: CircularProgressIndicator(color: Color(0xFF382E25)),
+            Center(
+              child: CircularProgressIndicator(color: _currentTheme.textColor),
             ),
 
           if (_errorMessage != null)
@@ -922,10 +945,12 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
   }
 
   Widget _buildThemeBtn(ReaderThemeData theme) {
+    // 羊皮纸1/2 底色相同，只能按名称区分选中项
+    final isSelected = _currentTheme.name == theme.name;
     return Padding(
       padding: const EdgeInsets.only(left: 6),
       child: GestureDetector(
-        onTap: () => _applyTheme(theme),
+        onTap: () => _updateReaderTheme(theme),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
@@ -937,7 +962,10 @@ class _EpubReaderPageState extends State<EpubReaderPage> {
                     fit: BoxFit.cover,
                   ),
             borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: Colors.grey),
+            border: Border.all(
+              color: isSelected ? Colors.blueAccent : Colors.grey,
+              width: isSelected ? 2 : 1,
+            ),
           ),
           child: Text(
             theme.name,

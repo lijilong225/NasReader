@@ -15,6 +15,7 @@ import '../widgets/typography_config.dart';
 import '../widgets/typography_settings_modal.dart';
 import '../services/app_logger.dart';
 import '../services/eye_care_prefs.dart';
+import '../services/reader_theme_prefs.dart';
 import '../services/typography_prefs.dart';
 import '../models/bookmark_model.dart';
 
@@ -88,6 +89,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage>
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadHandMode();
     _loadEyeCare();
+    _loadReaderTheme();
     _loadBookmarks();
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }
@@ -102,6 +104,18 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage>
     if (config == _eyeCare) return;
     setState(() => _eyeCare = config);
     EyeCarePrefs.save(config);
+  }
+
+  Future<void> _loadReaderTheme() async {
+    final saved = await ReaderThemePrefs.load();
+    if (!mounted || saved.name == _currentTheme.name) return;
+    setState(() => _currentTheme = saved);
+  }
+
+  void _updateReaderTheme(ReaderThemeData theme) {
+    if (theme.name == _currentTheme.name) return;
+    setState(() => _currentTheme = theme);
+    ReaderThemePrefs.save(theme);
   }
 
   Future<void> _bootstrap() async {
@@ -530,13 +544,19 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage>
     if (_isLoading) {
       return Scaffold(
         backgroundColor: _currentTheme.bgColor,
-        body: const Center(
+        body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              CircularProgressIndicator(color: Color(0xFF382E25)),
-              SizedBox(height: 16),
-              Text('正在排版全文...', style: TextStyle(color: Colors.black54, fontSize: 13)),
+              CircularProgressIndicator(color: _currentTheme.textColor),
+              const SizedBox(height: 16),
+              Text(
+                '正在排版全文...',
+                style: TextStyle(
+                  color: _currentTheme.textColor.withValues(alpha: 0.6),
+                  fontSize: 13,
+                ),
+              ),
             ],
           ),
         ),
@@ -759,7 +779,7 @@ class _StreamTxtReaderPageState extends State<StreamTxtReaderPage>
                                     return Padding(
                                       padding: const EdgeInsets.only(left: 6),
                                       child: GestureDetector(
-                                        onTap: () => setState(() => _currentTheme = theme),
+                                        onTap: () => _updateReaderTheme(theme),
                                         child: Container(
                                           width: 48,
                                           height: 28,

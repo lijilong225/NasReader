@@ -115,6 +115,7 @@ func main() {
 		fileGroup.Use(middleware.AuthMiddleware())
 		{
 			fileGroup.GET("/browse", handlers.BrowseDirectory)
+			fileGroup.GET("/search", handlers.SearchBooks)
 			fileGroup.GET("/download", handlers.DownloadFile)
 			fileGroup.POST("/trash", handlers.MoveToTrash)
 			fileGroup.POST("/trash/restore", handlers.RestoreFromTrash)

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
@@ -75,6 +76,13 @@ class NasFileItem {
       BookCacheNaming.buildFileName(bookId: bookId, originalName: name);
 }
 
+/// 搜索结果所在目录的展示文案。全库搜索会跨目录返回同名书籍，必须标出位置才能区分。
+String formatSearchLocation(String remotePath) {
+  final dir = p.dirname(remotePath);
+  if (dir.isEmpty || dir == '.' || dir == '/') return '书库根目录';
+  return dir;
+}
+
 class FileBrowserPage extends StatefulWidget {
   final Dio? dio; // 👈 优化为可选，内部自动从 NetworkClient / ApiConfig 回退
 
@@ -98,6 +106,16 @@ class FileBrowserPageState extends State<FileBrowserPage> {
   Set<String> _favoriteIds = {};
   Set<String> _shelfBookIds = {};
 
+  // 搜索态与目录浏览态互不干扰：退出搜索后 _currentPath / _items 原样保留
+  bool _isSearching = false;
+  final TextEditingController _searchController = TextEditingController();
+  Timer? _searchDebounce;
+  String _searchKeyword = '';
+  List<NasFileItem> _searchResults = [];
+  bool _isSearchLoading = false;
+  String? _searchError;
+  bool _searchTruncated = false;
+
   @override
   void initState() {
     super.initState();
@@ -109,6 +127,8 @@ class FileBrowserPageState extends State<FileBrowserPage> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
+    _searchController.dispose();
     FavoriteService.revision.removeListener(_refreshFavoriteIds);
     super.dispose();
   }
@@ -287,6 +307,110 @@ class FileBrowserPageState extends State<FileBrowserPage> {
           _errorMessage = '加载失败: $e';
         });
       }
+    }
+  }
+
+  /// 打开搜索态：仅切换 UI，目录列表状态原样保留，退出后无需重新加载
+  void _enterSearchMode() {
+    setState(() {
+      _isSearching = true;
+      _searchError = null;
+      _searchTruncated = false;
+    });
+  }
+
+  /// 退出搜索态并清空搜索上下文
+  void _exitSearchMode() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() {
+      _isSearching = false;
+      _searchKeyword = '';
+      _searchResults = [];
+      _isSearchLoading = false;
+      _searchError = null;
+      _searchTruncated = false;
+    });
+  }
+
+  /// 输入防抖，避免每敲一个字都触发一次服务端全库遍历
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    final keyword = value.trim();
+
+    if (keyword.isEmpty) {
+      setState(() {
+        _searchKeyword = '';
+        _searchResults = [];
+        _isSearchLoading = false;
+        _searchError = null;
+        _searchTruncated = false;
+      });
+      return;
+    }
+
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
+      _runSearch(keyword);
+    });
+  }
+
+  Future<void> _runSearch(String keyword) async {
+    final trimmed = keyword.trim();
+    if (trimmed.isEmpty) return;
+
+    setState(() {
+      _searchKeyword = trimmed;
+      _isSearchLoading = true;
+      _searchError = null;
+      _searchTruncated = false;
+    });
+
+    try {
+      await _updateCachedFiles();
+      _favoriteIds = await FavoriteService.getFavoriteIds();
+      await _refreshShelfBookIds();
+
+      final res = await _dio.get(
+        '/api/v1/files/search',
+        queryParameters: {'q': trimmed},
+        // 服务端无索引，全库递归遍历比单目录浏览慢得多，超时按本次请求放宽
+        options: Options(receiveTimeout: const Duration(seconds: 60)),
+      );
+
+      if (res.statusCode == 200 && res.data != null) {
+        List<dynamic> rawList = [];
+
+        if (res.data is Map && res.data['items'] is List) {
+          rawList = res.data['items'];
+        } else if (res.data is Map && res.data['data'] is List) {
+          rawList = res.data['data'];
+        } else if (res.data is List) {
+          rawList = res.data;
+        }
+
+        final results = rawList
+            .map((e) => NasFileItem.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+
+        AppLogger.log('🔎 全库搜索「$trimmed」命中 ${results.length} 本');
+
+        if (!mounted) return;
+        setState(() {
+          _searchResults = results;
+          _searchTruncated =
+              res.data is Map && res.data['truncated'] == true;
+          _isSearchLoading = false;
+        });
+      } else {
+        throw Exception('搜索失败: ${res.statusCode}');
+      }
+    } catch (e) {
+      AppLogger.log('❌ 全库搜索失败: $e');
+      if (!mounted) return;
+      setState(() {
+        _isSearchLoading = false;
+        _searchError = '搜索失败: $e';
+      });
     }
   }
 
@@ -591,7 +715,11 @@ class FileBrowserPageState extends State<FileBrowserPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('已把《$title》移动到垃圾箱')),
       );
-      await _loadDirectory(_currentPath);
+      if (_isSearching) {
+        await _runSearch(_searchKeyword);
+      } else {
+        await _loadDirectory(_currentPath);
+      }
     } catch (e) {
       AppLogger.log('移动到垃圾箱失败: ${item.path} -> $e');
       if (!mounted) return;
@@ -778,67 +906,257 @@ class FileBrowserPageState extends State<FileBrowserPage> {
     final isRoot = _currentPath == '/' || _currentPath.isEmpty;
 
     return PopScope(
-      canPop: isRoot,
+      // 搜索态下返回键先退出搜索，其次才是回上级目录
+      canPop: isRoot && !_isSearching,
       onPopInvokedWithResult: (didPop, result) {
-        if (!didPop && !isRoot) {
+        if (didPop) return;
+        if (_isSearching) {
+          _exitSearchMode();
+          return;
+        }
+        if (!isRoot) {
           final parent = p.dirname(_currentPath);
           _loadDirectory(parent.isEmpty ? '/' : parent);
         }
       },
       child: Scaffold(
-        appBar: AppBar(
-          title: Text(
-            isRoot ? 'NAS 书库' : p.basename(_currentPath),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          leading: !isRoot
-              ? IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () {
-                    final parent = p.dirname(_currentPath);
-                    _loadDirectory(parent.isEmpty ? '/' : parent);
-                  },
-                )
-              : null,
-          actions: [
-            PopupMenuButton<FileSortType>(
-              icon: const Icon(Icons.sort),
-              tooltip: '排序方式',
-              onSelected: _changeSort,
-              itemBuilder: (context) => FileSortType.values.map((type) {
-                final isSelected = type == _currentSort;
-                return PopupMenuItem<FileSortType>(
-                  value: type,
-                  child: Row(
-                    children: [
-                      Icon(
-                        isSelected ? Icons.check : Icons.radio_button_unchecked,
-                        size: 18,
-                        color: isSelected ? Theme.of(context).primaryColor : Colors.grey,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        type.label,
-                        style: TextStyle(
-                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                          color: isSelected ? Theme.of(context).primaryColor : null,
-                        ),
-                      ),
-                    ],
+        appBar: _isSearching ? _buildSearchAppBar() : _buildBrowseAppBar(isRoot),
+        body: _isSearching ? _buildSearchContent() : _buildContent(),
+      ),
+    );
+  }
+
+  AppBar _buildBrowseAppBar(bool isRoot) {
+    return AppBar(
+      title: Text(
+        isRoot ? 'NAS 书库' : p.basename(_currentPath),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      leading: !isRoot
+          ? IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () {
+                final parent = p.dirname(_currentPath);
+                _loadDirectory(parent.isEmpty ? '/' : parent);
+              },
+            )
+          : null,
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.search),
+          tooltip: '搜索整个书库',
+          onPressed: _enterSearchMode,
+        ),
+        PopupMenuButton<FileSortType>(
+          icon: const Icon(Icons.sort),
+          tooltip: '排序方式',
+          onSelected: _changeSort,
+          itemBuilder: (context) => FileSortType.values.map((type) {
+            final isSelected = type == _currentSort;
+            return PopupMenuItem<FileSortType>(
+              value: type,
+              child: Row(
+                children: [
+                  Icon(
+                    isSelected ? Icons.check : Icons.radio_button_unchecked,
+                    size: 18,
+                    color: isSelected ? Theme.of(context).primaryColor : Colors.grey,
                   ),
-                );
-              }).toList(),
-            ),
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              tooltip: '刷新当前目录',
-              onPressed: () => _loadDirectory(_currentPath),
+                  const SizedBox(width: 8),
+                  Text(
+                    type.label,
+                    style: TextStyle(
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      color: isSelected ? Theme.of(context).primaryColor : null,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+        ),
+        IconButton(
+          icon: const Icon(Icons.refresh),
+          tooltip: '刷新当前目录',
+          onPressed: () => _loadDirectory(_currentPath),
+        ),
+      ],
+    );
+  }
+
+  AppBar _buildSearchAppBar() {
+    return AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back),
+        tooltip: '退出搜索',
+        onPressed: _exitSearchMode,
+      ),
+      titleSpacing: 0,
+      title: TextField(
+        controller: _searchController,
+        autofocus: true,
+        textInputAction: TextInputAction.search,
+        decoration: const InputDecoration(
+          hintText: '搜索整个书库的书名',
+          border: InputBorder.none,
+          isCollapsed: true,
+        ),
+        onChanged: _onSearchChanged,
+        onSubmitted: (value) {
+          _searchDebounce?.cancel();
+          _runSearch(value);
+        },
+      ),
+      actions: [
+        // 监听输入框自身变化，不依赖防抖后的 setState 才能显示清空按钮
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _searchController,
+          builder: (context, value, _) {
+            if (value.text.isEmpty) return const SizedBox.shrink();
+            return IconButton(
+              icon: const Icon(Icons.close),
+              tooltip: '清空关键词',
+              onPressed: () {
+                _searchController.clear();
+                _onSearchChanged('');
+              },
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSearchContent() {
+    if (_isSearchLoading) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text(
+              '正在检索整个书库...',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
             ),
           ],
         ),
-        body: _buildContent(),
+      );
+    }
+
+    if (_searchError != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
+              const SizedBox(height: 12),
+              Text(_searchError!, textAlign: TextAlign.center),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.refresh),
+                label: const Text('重试'),
+                onPressed: () => _runSearch(_searchKeyword),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_searchKeyword.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text(
+            '输入书名关键词，检索整个 NAS 书库',
+            style: TextStyle(color: Colors.grey),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+
+    if (_searchResults.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            '没有找到包含「$_searchKeyword」的书籍',
+            style: const TextStyle(color: Colors.grey),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          color: Theme.of(context).dividerColor.withValues(alpha: 0.08),
+          child: Text(
+            _searchTruncated
+                ? '命中较多，仅显示前 ${_searchResults.length} 本，请补充关键词'
+                : '共找到 ${_searchResults.length} 本书',
+            style: const TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+        ),
+        Expanded(
+          child: ListView.separated(
+            itemCount: _searchResults.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (context, index) =>
+                _buildSearchResultTile(_searchResults[index]),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSearchResultTile(NasFileItem item) {
+    final ext = p.extension(item.name).toLowerCase();
+    final format = BookFormat.fromExtension(ext);
+    final isCached = _isItemCached(item);
+    final size = _formatSize(item.size);
+    final location = formatSearchLocation(item.path);
+
+    return ListTile(
+      // 48px 的三点按钮内部自带 12px 视觉留白，右侧内边距取 4px 即为 16px
+      contentPadding: const EdgeInsets.only(left: 16, right: 4),
+      leading: BookLeadingIcon(
+        icon: format?.icon ?? Icons.insert_drive_file_outlined,
+        iconColor: format?.color ?? Colors.grey,
+        isFavorite: _favoriteIds.contains(item.syncBookId),
       ),
+      title: Text(
+        item.name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontWeight: FontWeight.w500),
+      ),
+      subtitle: Text(
+        size.isEmpty ? location : '$size · $location',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 12, color: Colors.grey),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isCached ? Icons.check_circle_outline : Icons.cloud_download_outlined,
+            size: 20,
+            color: isCached ? Colors.green : Colors.grey,
+          ),
+          if (format != null) _buildBookActionMenu(item),
+        ],
+      ),
+      onTap: () => _handleItemTap(item),
     );
   }
 
